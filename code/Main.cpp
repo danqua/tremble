@@ -7,6 +7,8 @@
 #include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
+#define STB_RECT_PACK_IMPLEMENTATION
+#include <stb_rect_pack.h>
 
 #include <algorithm>
 #include <vector>
@@ -66,6 +68,20 @@ struct Face
     glm::vec3 vAxis;
     glm::vec3 normal;
     std::vector<glm::vec3> vertices;
+};
+
+struct Image
+{
+    int       width;
+    int       height;
+    uint32_t* pixels;
+};
+
+struct Texture
+{
+    GLuint id;
+    int    width;
+    int    height;
 };
 
 glm::vec3 GetForwardVector(const glm::vec3& rotation)
@@ -216,7 +232,7 @@ void DrawTexturedPolygon(const std::vector<glm::vec3>& vertices, int textureInde
     glDisable(GL_TEXTURE_2D);
 }
 
-void DrawTexturedFace(const Face& face, GLuint texture)
+void DrawTexturedFace(const Face& face, Texture texture)
 {
     glm::vec3 min = glm::vec3(FLT_MAX);
     glm::vec3 max = glm::vec3(-FLT_MAX);
@@ -230,8 +246,9 @@ void DrawTexturedFace(const Face& face, GLuint texture)
     float width = glm::abs(glm::dot(face.uAxis, max - min));
     float height = glm::abs(glm::dot(face.vAxis, max - min));
 
+
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindTexture(GL_TEXTURE_2D, texture.id);
 
     glBegin(GL_TRIANGLE_FAN);
     glColor3f(1.0f, 1.0f, 1.0f);
@@ -240,6 +257,22 @@ void DrawTexturedFace(const Face& face, GLuint texture)
         // FIX THIS!!!
         float u = glm::abs(glm::dot(face.uAxis, face.vertices[i] - min) / width);
         float v = glm::abs(glm::dot(face.vAxis, face.vertices[i] - min) / height);
+
+        if (face.uAxis.x == -1 || face.uAxis.z == -1)
+        {
+            u = 1.0f - u;
+        }
+        if (face.vAxis.z == -1)
+        {
+            v = 1.0f - v;
+        }
+
+
+        float pw = 1.0f / texture.width;
+        float ph = 1.0f / texture.height;
+
+        u = (u == 0.0f) * pw + u - (u == 1.0f) * pw;
+        v = (v == 0.0f) * ph + v - (v == 1.0f) * ph;
 
         glTexCoord2f(u, v);
         glVertex3f(face.vertices[i].x, face.vertices[i].y, face.vertices[i].z);
@@ -375,8 +408,8 @@ GLuint CreateTextureFromImage(const uint32_t* pixels, int width, int height)
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, GL_FALSE, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -504,7 +537,7 @@ int main(int argc, char** argv)
         Face floorFace;
         floorFace.normal = glm::vec3(0.0f, 1.0f, 0.0f);
         floorFace.uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
-        floorFace.vAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+        floorFace.vAxis = glm::vec3(0.0f, 0.0f, -1.0f);
 
         Face ceilingFace;
         ceilingFace.normal = glm::vec3(0.0f, -1.0f, 0.0f);
@@ -518,7 +551,7 @@ int main(int argc, char** argv)
         }
 
         // revert the order of the ceiling face
-        //std::reverse(floorFace.vertices.begin(), floorFace.vertices.end());
+        std::reverse(floorFace.vertices.begin(), floorFace.vertices.end());
 
         faces.push_back(floorFace);
         faces.push_back(ceilingFace);
@@ -527,11 +560,12 @@ int main(int argc, char** argv)
     fclose(fp);
 
     Light light = {};
-    light.position = glm::vec3(2.0f, 1.5f, 3.0f);
-    light.color = glm::vec3(1.0f);
+    light.position = glm::vec3(3.0f, 2.0f, 3.0f);
+    light.color = glm::vec3(0.85f, 0.58f, 0.98f);
     light.intensity = 2.0f;
 
-    std::vector<GLuint> textures;
+    std::vector<Image> images;
+    std::vector<Texture> textures;
 
     int faceIndex = 0;
     for (const Face& face : faces)
@@ -549,15 +583,17 @@ int main(int argc, char** argv)
         float height = glm::abs(glm::dot(face.vAxis, max - min));
 
         std::vector<glm::vec3> luxels;
-        float unit = 0.25f;
+
+
+        float unit = 0.125f;
 
         int texWidth = 0;
         int texHeight = 0;
 
 
-        for (float v = 0; v < height; v += unit)
+        for (float v = -unit; v < height + unit; v += unit)
         {
-            for (float u = 0; u < width; u += unit)
+            for (float u = -unit; u < width + unit; u += unit)
             {
                 glm::vec3 luxel = face.vertices[0] + (face.uAxis * u + face.vAxis * v);
                 luxels.push_back(luxel);
@@ -570,8 +606,12 @@ int main(int argc, char** argv)
             texHeight++;
         }
 
-        // Create texture for luxels
-        std::vector<uint32_t> pixels(texWidth * texHeight);
+        // Create image for luxels
+        Image& image = images.emplace_back();
+        image.width = texWidth;
+        image.height = texHeight;
+        image.pixels = new uint32_t[texWidth * texHeight];
+
         int pixelIndex = 0;
         for (const glm::vec3& luxel : luxels)
         {
@@ -583,27 +623,77 @@ int main(int argc, char** argv)
             if (RayPolygonIntersection(ray, face.vertices.data(), face.vertices.size(), point))
             {
                 float attenuation = 1.0f / glm::dot(point - light.position, point - light.position) * light.intensity;
-                uint32_t color = glm::packUnorm4x8(glm::vec4(glm::vec3(attenuation), 1.0f));
-                pixels[pixelIndex] = color;
+                uint32_t color = glm::packUnorm4x8(glm::vec4(light.color * attenuation, 1.0f));
+                image.pixels[pixelIndex] = color;
             }
             else
             {
                 float attenuation = 1.0f / glm::dot(luxel - light.position, luxel - light.position) * light.intensity;
-                uint32_t color = glm::packUnorm4x8(glm::vec4(glm::vec3(attenuation), 1.0f));
-                pixels[pixelIndex] = color;
+                uint32_t color = glm::packUnorm4x8(glm::vec4(light.color * attenuation, 1.0f));
+                image.pixels[pixelIndex] = color;
                 //pixels[pixelIndex] = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
             }
             pixelIndex++;
         }
 
         // Save texture to file
-        char filename[256];
-        sprintf(filename, "textures/%d.png", faceIndex++);
-        stbi_write_png(filename, texWidth, texHeight, 4, pixels.data(), texWidth * 4);
-
-        GLuint& texture = textures.emplace_back();
-        texture = CreateTextureFromImage(pixels.data(), texWidth, texHeight);
+        //char filename[256];
+        //sprintf(filename, "textures/%d.png", faceIndex++);
+        //stbi_write_png(filename, texWidth, texHeight, 4, pixels.data(), texWidth * 4);
+        /*
+        Texture& texture = textures.emplace_back();
+        texture.width = texWidth;
+        texture.height = texHeight;
+        texture.id = CreateTextureFromImage(pixels.data(), texWidth, texHeight);
+        */
     }
+
+    // Create textures from images
+    for (const Image& image : images)
+    {
+        Texture& texture = textures.emplace_back();
+        texture.width = image.width;
+        texture.height = image.height;
+        texture.id = CreateTextureFromImage(image.pixels, image.width, image.height);
+    }
+
+    stbrp_rect* rects = new stbrp_rect[images.size()];
+    for (auto i = 0; i < images.size(); i++)
+    {
+        rects[i].id = i;
+        rects[i].w = images[i].width;
+        rects[i].h = images[i].height;
+    }
+
+    int numNodes = 1024;
+
+    stbrp_context context;
+    stbrp_node* nodes = new stbrp_node[numNodes];
+    stbrp_init_target(&context, 1024, 1024, nodes, numNodes);
+    stbrp_pack_rects(&context, rects, images.size());
+
+    uint32_t* atlas = new uint32_t[1024 * 1024];
+    for (auto i = 0; i < 1024 * 1024; i++)
+    {
+        atlas[i] = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+    }
+
+    for (auto i = 0; i < images.size(); i++)
+    {
+        if (rects[i].was_packed)
+        {
+            for (auto y = 0; y < images[i].height; y++)
+            {
+                for (auto x = 0; x < images[i].width; x++)
+                {
+                    atlas[(rects[i].y + y) * 1024 + (rects[i].x + x)] = images[i].pixels[y * images[i].width + x];
+                }
+            }
+        }
+    }
+
+    stbi_write_png("textures/atlas.png", 1024, 1024, 4, atlas, 1024 * 4);
+    //stbi_write_jpg("textures/atlas.jpg", 1024, 1024, 4, atlas, 100);
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(window))
@@ -620,7 +710,7 @@ int main(int argc, char** argv)
         glm::mat4 viewMatrix = GetView(camera);
 
         glEnable(GL_DEPTH_TEST);
-        //glEnable(GL_CULL_FACE);
+        glEnable(GL_CULL_FACE);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glMatrixMode(GL_PROJECTION);
@@ -650,9 +740,17 @@ int main(int argc, char** argv)
         int textureIndex = 0;
         for (const Face& face : faces)
         {
+
+
+            /*if (textureIndex == 5)
+            {
+                DrawPolygonLines(face.vertices.data(), face.vertices.size(), glm::vec3(1.0f, 1.0f, 0.0f));
+            }*/
+                DrawTexturedFace(face, textures[textureIndex]);
+            textureIndex++;
             //DrawTexturedPolygon(face.vertices, textures[textureIndex++]); 
-            DrawTexturedFace(face, textures[textureIndex++]);
             //DrawPolygonLines(face.vertices.data(), face.vertices.size());
+
         }
         
 

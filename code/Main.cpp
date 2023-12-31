@@ -3,6 +3,18 @@
 #include <glm/gtx/intersect.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include <algorithm>
+#include <vector>
+
+constexpr glm::vec3 kWorldUp      = glm::vec3(0.0f,  1.0f,  0.0f);
+constexpr glm::vec3 kWorldForward = glm::vec3(0.0f,  0.0f, -1.0f);
+constexpr glm::vec3 kWorldRight   = glm::vec3(1.0f,  0.0f,  0.0f);
+
 bool keys[1024];
 glm::vec2 mouseDelta;
 
@@ -48,19 +60,27 @@ struct Ray
     glm::vec3 direction;
 };
 
+struct Face
+{
+    glm::vec3 uAxis;
+    glm::vec3 vAxis;
+    glm::vec3 normal;
+    std::vector<glm::vec3> vertices;
+};
+
 glm::vec3 GetForwardVector(const glm::vec3& rotation)
 {
-    return glm::normalize(glm::quat(glm::radians(rotation)) * glm::vec3(0.0f, 0.0f, -1.0f));
+    return glm::normalize(glm::quat(glm::radians(rotation)) * kWorldForward);
 }
 
 glm::vec3 GetRightVector(const glm::vec3& rotation)
 {
-    return glm::normalize(glm::quat(glm::radians(rotation)) * glm::vec3(1.0f, 0.0f, 0.0f));
+    return glm::normalize(glm::quat(glm::radians(rotation)) * kWorldRight);
 }
 
 glm::vec3 GetUpVector(const glm::vec3& rotation)
 {
-    return glm::normalize(glm::quat(glm::radians(rotation)) * glm::vec3(0.0f, 1.0f, 0.0f));
+    return glm::normalize(glm::quat(glm::radians(rotation)) * kWorldUp);
 }
 
 glm::mat4 GetProjection(const Camera& camera)
@@ -76,13 +96,12 @@ glm::vec3 GetCameraRotation(const Camera& camera)
 glm::mat4 GetView(const Camera& camera)
 {
     glm::vec3 forward = GetForwardVector(GetCameraRotation(camera));
-    return glm::lookAt(camera.position, camera.position + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+    return glm::lookAt(camera.position, camera.position + forward, kWorldUp);
 }
-
 
 void GetQuadVertices(const Quad& quad, glm::vec3 vertices[4])
 {
-    glm::vec3 up    = glm::cross(quad.normal, glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::vec3 up    = glm::cross(quad.normal, kWorldRight);
     glm::vec3 right = glm::cross(up, quad.normal);
 
     glm::vec3 halfR = right * quad.width * 0.5f;
@@ -151,6 +170,85 @@ void DrawQuadLines(const Quad& quad, const glm::vec3& color = glm::vec3(1.0f))
     glEnd();
 }
 
+void DrawPolygon(const glm::vec3* vertices, int numVertices, const glm::vec3& color = glm::vec3(1.0f))
+{
+    glBegin(GL_TRIANGLE_FAN);
+    glColor3f(color.r, color.g, color.b);
+    for (int i = 0; i < numVertices; i++)
+    {
+        glVertex3f(vertices[i].x, vertices[i].y, vertices[i].z);
+    }
+    glEnd();
+}
+
+void DrawPolygonLines(const glm::vec3* vertices, int numVertices, const glm::vec3& color = glm::vec3(1.0f))
+{
+    glBegin(GL_LINE_LOOP);
+    glColor3f(color.r, color.g, color.b);
+    for (int i = 0; i < numVertices; i++)
+    {
+        glVertex3f(vertices[i].x, vertices[i].y, vertices[i].z);
+    }
+    glEnd();
+}
+
+void DrawTexturedPolygon(const std::vector<glm::vec3>& vertices, int textureIndex)
+{
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, textureIndex);
+
+    glm::vec2 uvs[] = {
+        glm::vec2(0.0f, 0.0f),
+        glm::vec2(1.0f, 0.0f),
+        glm::vec2(1.0f, 1.0f),
+        glm::vec2(0.0f, 1.0f),
+    };
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    for (int i = 0; i < vertices.size(); i++)
+    {
+        glTexCoord2f(uvs[i].s, uvs[i].t);
+        glVertex3f(vertices[i].x, vertices[i].y, vertices[i].z);
+    }
+    glEnd();
+
+    glDisable(GL_TEXTURE_2D);
+}
+
+void DrawTexturedFace(const Face& face, GLuint texture)
+{
+    glm::vec3 min = glm::vec3(FLT_MAX);
+    glm::vec3 max = glm::vec3(-FLT_MAX);
+
+    for (const glm::vec3& vertex : face.vertices)
+    {
+        min = glm::min(min, vertex);
+        max = glm::max(max, vertex);
+    }
+
+    float width = glm::abs(glm::dot(face.uAxis, max - min));
+    float height = glm::abs(glm::dot(face.vAxis, max - min));
+
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor3f(1.0f, 1.0f, 1.0f);
+    for (int i = 0; i < face.vertices.size(); i++)
+    {
+        // FIX THIS!!!
+        float u = glm::abs(glm::dot(face.uAxis, face.vertices[i] - min) / width);
+        float v = glm::abs(glm::dot(face.vAxis, face.vertices[i] - min) / height);
+
+        glTexCoord2f(u, v);
+        glVertex3f(face.vertices[i].x, face.vertices[i].y, face.vertices[i].z);
+    }
+    glEnd();
+
+    glDisable(GL_TEXTURE_2D);
+}
+
 bool RayQuadIntersection(const Ray& ray, const Quad& quad, glm::vec3& point)
 {
     glm::vec3 v[4];
@@ -171,9 +269,24 @@ bool RayQuadIntersection(const Ray& ray, const Quad& quad, glm::vec3& point)
     return false;
 }
 
+bool RayPolygonIntersection(const Ray& ray, const glm::vec3* vertices, int numVertices, glm::vec3& point)
+{
+    for (int i = 0; i < numVertices - 2; i++)
+    {
+        glm::vec2 barypos;
+        float t;
+        if (glm::intersectRayTriangle(ray.origin, ray.direction, vertices[0], vertices[i + 1], vertices[i + 2], barypos, t))
+        {
+            point = ray.origin + ray.direction * t;
+            return true;
+        }
+    }
+    return false;
+}
+
 void GetQuadLuxels(const Quad& quad, int cols, int rows, int padding, glm::vec3* luxels)
 {
-    glm::vec3 up    = glm::cross(quad.normal, glm::vec3(1.0f, 0.0f, 0.0f));
+    glm::vec3 up    = glm::cross(quad.normal, kWorldRight);
     glm::vec3 right = glm::cross(up, quad.normal);
 
     float xOffset = (quad.width / (float)cols) * 1.5f;
@@ -205,13 +318,11 @@ void UpdateCameraMovement(Camera& camera, Movement& movement, float dt)
 
     glm::vec3 acceleration = glm::vec3(0.0f);
 
+    float speedBump = 1.0f;
+
     if (keys[GLFW_KEY_LEFT_SHIFT])
     {
-        movement.speed = 20.0f;
-    }
-    else
-    {
-        movement.speed = 10.0f;
+        speedBump = 2.0f;
     }
 
     if (keys[GLFW_KEY_W])
@@ -232,11 +343,11 @@ void UpdateCameraMovement(Camera& camera, Movement& movement, float dt)
     }
     if (keys[GLFW_KEY_E])
     {
-        acceleration.y += 1.0f;
+        acceleration += kWorldUp;
     }
     if (keys[GLFW_KEY_Q])
     {
-        acceleration.y -= 1.0f;
+        acceleration -= kWorldUp;
     }
 
     if (glm::length(acceleration) > 0.0f)
@@ -244,7 +355,7 @@ void UpdateCameraMovement(Camera& camera, Movement& movement, float dt)
         acceleration = glm::normalize(acceleration);
     }
 
-    acceleration *= movement.speed;
+    acceleration *= movement.speed * speedBump;
 
     glm::vec3 friction = -movement.velocity * movement.friction;
     glm::vec3 totalAcceleration = acceleration + friction;
@@ -253,23 +364,42 @@ void UpdateCameraMovement(Camera& camera, Movement& movement, float dt)
     camera.position += movement.velocity * dt;
 
     float smoothFactor = 0.1f; // Adjust this value to your liking
-    camera.yaw = Lerp(camera.yaw, camera.yaw - mouseDelta.x, smoothFactor);
+    camera.yaw   = Lerp(camera.yaw  , camera.yaw   - mouseDelta.x, smoothFactor);
     camera.pitch = Lerp(camera.pitch, camera.pitch - mouseDelta.y, smoothFactor);
 }
+
+GLuint CreateTextureFromImage(const uint32_t* pixels, int width, int height)
+{
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, GL_FALSE, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return texture;
+}
+
+#include <stdio.h>
 
 int main(int argc, char** argv)
 {
     GLFWwindow* window;
 
-    /* Initialize the library */
     if (!glfwInit())
+    {
         return -1;
+    }
 
     int windowWidth = 640;
     int windowHeight = 480;
 
     /* Create a windowed mode window and its OpenGL context */
     window = glfwCreateWindow(windowWidth, windowHeight, "Hello World", NULL, NULL);
+
     if (!window)
     {
         glfwTerminate();
@@ -287,6 +417,11 @@ int main(int argc, char** argv)
     glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
         if (action == GLFW_PRESS)
         {
+            if (key == GLFW_KEY_ESCAPE)
+            {
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
+
             keys[key] = true;
         }
         else if (action == GLFW_RELEASE)
@@ -322,43 +457,152 @@ int main(int argc, char** argv)
     camera.fov = 70.0f;
     camera.aspect = 640.0f / 480.0f;
     camera.near = 0.1f;
-    camera.far = 100.0f;
-    camera.position = glm::vec3(0.0f, 0.0f, 4.0f);
+    camera.far = 1000.0f;
+    camera.position = glm::vec3(0.0f, 1.0f, 3.0f);
 
     Movement movement = {};
     movement.speed = 10.0f;
     movement.friction = 6.0f;
     movement.mouseSensitivity = 0.1f;
 
-    Quad quad1 = {};
-    quad1.normal = glm::vec3(0.0f, 0.0f, 1.0f);
-    quad1.width = 1.0f;
-    quad1.height = 1.0f;
 
-    Quad quad2 = {};
-    quad2.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-    quad2.center = glm::vec3(0.0f, -0.5f, 0.5f);
-    quad2.width = 1.0f;
-    quad2.height = 1.0f;
+    std::vector<Face> faces;
 
-    const int numQuads = 2;
-    Quad quads[numQuads] = { quad1, quad2 };
+    FILE* fp = fopen("map.txt", "rb");
+
+
+    // Read the text file line by line
+    char line[1024];
+    while (fgets(line, 1024, fp))
+    {
+        if (line[0] == '#')
+        {
+            continue;
+        }
+
+        int x1, y1, x2, y2;
+        sscanf(line, "%d %d %d %d", &x1, &y1, &x2, &y2);
+
+        Face& face = faces.emplace_back();
+
+        glm::vec3 v1 = glm::vec3(x1, 0, y1);
+        glm::vec3 v2 = glm::vec3(x2, 0, y2);
+        glm::vec3 v3 = glm::vec3(x2, 3, y2);
+        glm::vec3 v4 = glm::vec3(x1, 3, y1);
+        
+        face.vertices.push_back(v1);
+        face.vertices.push_back(v2);
+        face.vertices.push_back(v3);
+        face.vertices.push_back(v4);
+        face.normal = glm::normalize(glm::cross(v2 - v1, v3 - v1));
+        face.uAxis = glm::normalize(glm::cross(kWorldUp, face.normal));
+        face.vAxis = glm::normalize(glm::cross(face.normal, face.uAxis));
+    }
+
+    // Create floor/ceiling face
+    {
+        Face floorFace;
+        floorFace.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        floorFace.uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+        floorFace.vAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+
+        Face ceilingFace;
+        ceilingFace.normal = glm::vec3(0.0f, -1.0f, 0.0f);
+        ceilingFace.uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
+        ceilingFace.vAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+
+        for (const Face& face : faces)
+        {
+            floorFace.vertices.push_back(face.vertices[0]);
+            ceilingFace.vertices.push_back(face.vertices[0] + glm::vec3(0.0f, 3.0f, 0.0f));
+        }
+
+        // revert the order of the ceiling face
+        //std::reverse(floorFace.vertices.begin(), floorFace.vertices.end());
+
+        faces.push_back(floorFace);
+        faces.push_back(ceilingFace);
+    }
+
+    fclose(fp);
 
     Light light = {};
-    light.position = glm::vec3(0.0f, 0.0f, 2.0f);
+    light.position = glm::vec3(2.0f, 1.5f, 3.0f);
+    light.color = glm::vec3(1.0f);
+    light.intensity = 2.0f;
 
-    int quadLuxelCols = 4;
-    int quadLuxelRows = 4;
-    int quadLuxelPadding = 1;
-    int quadNumLuxels = (quadLuxelCols + quadLuxelPadding * 2) * (quadLuxelRows + quadLuxelPadding * 2);
+    std::vector<GLuint> textures;
 
-    glm::vec3* luxels = new glm::vec3[quadNumLuxels * numQuads];
-
-    glm::vec3* luxelWalker = luxels;
-    for (int i = 0; i < numQuads; i++)
+    int faceIndex = 0;
+    for (const Face& face : faces)
     {
-        GetQuadLuxels(quads[i], quadLuxelCols, quadLuxelRows, quadLuxelPadding, luxelWalker);
-        luxelWalker += quadNumLuxels;
+        glm::vec3 min = glm::vec3(FLT_MAX);
+        glm::vec3 max = glm::vec3(-FLT_MAX);
+
+        for (const glm::vec3& vertex : face.vertices)
+        {
+            min = glm::min(min, vertex);
+            max = glm::max(max, vertex);
+        }
+
+        float width  = glm::abs(glm::dot(face.uAxis, max - min));
+        float height = glm::abs(glm::dot(face.vAxis, max - min));
+
+        std::vector<glm::vec3> luxels;
+        float unit = 0.25f;
+
+        int texWidth = 0;
+        int texHeight = 0;
+
+
+        for (float v = 0; v < height; v += unit)
+        {
+            for (float u = 0; u < width; u += unit)
+            {
+                glm::vec3 luxel = face.vertices[0] + (face.uAxis * u + face.vAxis * v);
+                luxels.push_back(luxel);
+
+                if (texHeight == 0)
+                {
+                    texWidth++;
+                }
+            }
+            texHeight++;
+        }
+
+        // Create texture for luxels
+        std::vector<uint32_t> pixels(texWidth * texHeight);
+        int pixelIndex = 0;
+        for (const glm::vec3& luxel : luxels)
+        {
+            Ray ray = {};
+            ray.origin = light.position;
+            ray.direction = luxel - light.position;
+
+            glm::vec3 point;
+            if (RayPolygonIntersection(ray, face.vertices.data(), face.vertices.size(), point))
+            {
+                float attenuation = 1.0f / glm::dot(point - light.position, point - light.position) * light.intensity;
+                uint32_t color = glm::packUnorm4x8(glm::vec4(glm::vec3(attenuation), 1.0f));
+                pixels[pixelIndex] = color;
+            }
+            else
+            {
+                float attenuation = 1.0f / glm::dot(luxel - light.position, luxel - light.position) * light.intensity;
+                uint32_t color = glm::packUnorm4x8(glm::vec4(glm::vec3(attenuation), 1.0f));
+                pixels[pixelIndex] = color;
+                //pixels[pixelIndex] = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+            }
+            pixelIndex++;
+        }
+
+        // Save texture to file
+        char filename[256];
+        sprintf(filename, "textures/%d.png", faceIndex++);
+        stbi_write_png(filename, texWidth, texHeight, 4, pixels.data(), texWidth * 4);
+
+        GLuint& texture = textures.emplace_back();
+        texture = CreateTextureFromImage(pixels.data(), texWidth, texHeight);
     }
 
     /* Loop until the user closes the window */
@@ -375,7 +619,9 @@ int main(int argc, char** argv)
         glm::mat4 projectionMatrix = GetProjection(camera);
         glm::mat4 viewMatrix = GetView(camera);
 
-        glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        //glEnable(GL_CULL_FACE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
@@ -384,38 +630,36 @@ int main(int argc, char** argv)
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
         glLoadMatrixf(glm::value_ptr(viewMatrix));
-
-        for (int i = 0; i < numQuads; i++)
-        {
-            DrawQuadLines(quads[i]);
-        }
         
-        DrawPoint(light.position, glm::vec3(1.0f, 1.0f, 0.0f), 8.0f);
-
-        Ray ray = {};
-        ray.origin = light.position;
-
-        glm::vec3* luxelWalker = luxels;
-        luxelWalker += quadNumLuxels;
-        for (int i = 0; i < quadNumLuxels; i++)
+        /*
+        for (const glm::vec3& luxel : luxels)
         {
-            ray.direction = glm::normalize(luxelWalker[i] - light.position);
+            Ray ray = {};
+            ray.origin = light.position;
+            ray.direction = luxel - light.position;
 
             glm::vec3 point;
-            if (RayQuadIntersection(ray, quads[0], point))
+            if (RayPolygonIntersection(ray, face.vertices.data(), face.vertices.size(), point))
             {
-                DrawLine(ray.origin, luxelWalker[i]);
-                DrawPoint(luxelWalker[i], glm::vec3(0.0f, 1.0f, 0.0f), 8.0f);
+                float attenuation = 1.0f / glm::dot(point - light.position, point - light.position);
+                DrawPoint(point, glm::vec3(attenuation), 10.0f);
             }
-            else
-            {
-                DrawLine(ray.origin, luxelWalker[i], glm::vec3(1.0f, 0.0f, 0.0f));
-                DrawPoint(luxelWalker[i], glm::vec3(1.0f, 0.0f, 0.0f), 8.0f);
-            }
+        }
+        */
+        // Draw surface
+        int textureIndex = 0;
+        for (const Face& face : faces)
+        {
+            //DrawTexturedPolygon(face.vertices, textures[textureIndex++]); 
+            DrawTexturedFace(face, textures[textureIndex++]);
+            //DrawPolygonLines(face.vertices.data(), face.vertices.size());
         }
         
 
-        /* Swap front and back buffers */
+        
+
+        DrawPoint(light.position, light.color, 10.0f);
+
         glfwSwapBuffers(window);
 
         mouseDelta = glm::vec2(0.0f);

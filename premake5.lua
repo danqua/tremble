@@ -20,7 +20,8 @@ project "Tremble"
     includedirs {
         "code",
         "extern/glfw/include",
-        "extern/glm"
+        "extern/glm",
+        "extern/stb"
     }
     files {
         "code/**.h",

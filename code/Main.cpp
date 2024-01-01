@@ -509,6 +509,20 @@ int main(int argc, char** argv)
     {
         int wallIndex;
         int numWalls;
+        int numPortals;
+        int* portals;
+
+        bool IsPortal(int index) const
+        {
+            for (int i = 0; i < numPortals; i++)
+            {
+                if (portals[i] == index)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
     };
 
     struct WallInfo
@@ -546,6 +560,10 @@ int main(int argc, char** argv)
         {
             parseState = ParseState::Wall;
         }
+        else if (line[0] == '#')
+        {
+            continue;
+        }
         else
         {
             if (line.empty())
@@ -556,7 +574,16 @@ int main(int argc, char** argv)
             {
                 SectorInfo& sectorInfo = sectorInfos.emplace_back();
                 std::stringstream ss(line);
-                ss >> sectorInfo.wallIndex >> sectorInfo.numWalls;
+                ss >> sectorInfo.wallIndex >> sectorInfo.numWalls >> sectorInfo.numPortals;
+
+                if (sectorInfo.numPortals > 0)
+                {
+                    sectorInfo.portals = new int[sectorInfo.numPortals];
+                    for (int i = 0; i < sectorInfo.numPortals; i++)
+                    {
+                        ss >> sectorInfo.portals[i];
+                    }
+                }
             }
             else if (parseState == ParseState::Wall)
             {
@@ -572,6 +599,11 @@ int main(int argc, char** argv)
         std::vector<Face> sectorFaces;
         for (int i = 0; i < sectorInfo.numWalls; i++)
         {
+            if (sectorInfo.IsPortal(sectorInfo.wallIndex + i))
+            {
+                continue;
+            }
+
             Face& face = sectorFaces.emplace_back();
             const WallInfo& wallInfo = wallInfos[sectorInfo.wallIndex + i];
 
@@ -588,6 +620,8 @@ int main(int argc, char** argv)
             face.uAxis = glm::normalize(glm::cross(kWorldUp, face.normal));
             face.vAxis = glm::normalize(glm::cross(face.normal, face.uAxis));
         }
+
+        // Skip floor/ceiling generation for now
 
         // Create floor and ceiling for the sector
         Face floorFace;
@@ -611,13 +645,14 @@ int main(int argc, char** argv)
 
         sectorFaces.push_back(floorFace);
         sectorFaces.push_back(ceilingFace);
+
         faces.insert(faces.end(), sectorFaces.begin(), sectorFaces.end());
     }
 
     Light light = {};
     light.position = glm::vec3(3.0f, 2.0f, 3.0f);
-    light.color = glm::vec3(0.85f, 0.58f, 0.98f);
-    light.intensity = 2.0f;
+    light.color = glm::vec3(1.0f);
+    light.intensity = 4.0f;
 
     std::vector<Image> images;
     std::vector<Texture> textures;
@@ -801,7 +836,8 @@ int main(int argc, char** argv)
             {
                 DrawPolygonLines(face.vertices.data(), face.vertices.size(), glm::vec3(1.0f, 1.0f, 0.0f));
             }*/
-                DrawTexturedFace(face, textures[textureIndex]);
+            DrawTexturedFace(face, textures[textureIndex]);
+            //DrawPolygonLines(face.vertices.data(), face.vertices.size());
             textureIndex++;
             //DrawTexturedPolygon(face.vertices, textures[textureIndex++]); 
             //DrawPolygonLines(face.vertices.data(), face.vertices.size());

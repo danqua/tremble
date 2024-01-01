@@ -418,6 +418,10 @@ GLuint CreateTextureFromImage(const uint32_t* pixels, int width, int height)
 
 #include <stdio.h>
 
+#include <fstream>
+#include <sstream>
+#include <string>
+
 int main(int argc, char** argv)
 {
     GLFWwindow* window;
@@ -501,50 +505,102 @@ int main(int argc, char** argv)
 
     std::vector<Face> faces;
 
-    FILE* fp = fopen("map.txt", "rb");
-
-
-    // Read the text file line by line
-    char line[1024];
-    while (fgets(line, 1024, fp))
+    struct SectorInfo
     {
-        if (line[0] == '#')
+        int wallIndex;
+        int numWalls;
+    };
+
+    struct WallInfo
+    {
+        int x1;
+        int y1;
+        int x2;
+        int y2;
+    };
+
+    std::vector<SectorInfo> sectorInfos;
+    std::vector<WallInfo> wallInfos;
+
+    enum class ParseState
+    {
+        None,
+        Sector,
+        Wall,
+    };
+
+    ParseState parseState = ParseState::None;
+
+
+    std::ifstream fs("map.txt");
+    
+    std::string line;
+
+    while (std::getline(fs, line))
+    {
+        if (line.find("[sectors]") != std::string::npos)
         {
-            continue;
+            parseState = ParseState::Sector;
         }
-
-        int x1, y1, x2, y2;
-        sscanf(line, "%d %d %d %d", &x1, &y1, &x2, &y2);
-
-        Face& face = faces.emplace_back();
-
-        glm::vec3 v1 = glm::vec3(x1, 0, y1);
-        glm::vec3 v2 = glm::vec3(x2, 0, y2);
-        glm::vec3 v3 = glm::vec3(x2, 3, y2);
-        glm::vec3 v4 = glm::vec3(x1, 3, y1);
-        
-        face.vertices.push_back(v1);
-        face.vertices.push_back(v2);
-        face.vertices.push_back(v3);
-        face.vertices.push_back(v4);
-        face.normal = glm::normalize(glm::cross(v2 - v1, v3 - v1));
-        face.uAxis = glm::normalize(glm::cross(kWorldUp, face.normal));
-        face.vAxis = glm::normalize(glm::cross(face.normal, face.uAxis));
+        else if (line.find("[walls]") != std::string::npos)
+        {
+            parseState = ParseState::Wall;
+        }
+        else
+        {
+            if (line.empty())
+            {
+                continue;
+            }
+            if (parseState == ParseState::Sector)
+            {
+                SectorInfo& sectorInfo = sectorInfos.emplace_back();
+                std::stringstream ss(line);
+                ss >> sectorInfo.wallIndex >> sectorInfo.numWalls;
+            }
+            else if (parseState == ParseState::Wall)
+            {
+                WallInfo& wallInfo = wallInfos.emplace_back();
+                std::stringstream ss(line);
+                ss >> wallInfo.x1 >> wallInfo.y1 >> wallInfo.x2 >> wallInfo.y2;
+            }
+        }
     }
 
-    // Create floor/ceiling face
+    for (const SectorInfo& sectorInfo : sectorInfos)
     {
+        std::vector<Face> sectorFaces;
+        for (int i = 0; i < sectorInfo.numWalls; i++)
+        {
+            Face& face = sectorFaces.emplace_back();
+            const WallInfo& wallInfo = wallInfos[sectorInfo.wallIndex + i];
+
+            glm::vec3 v1 = glm::vec3(wallInfo.x1, 0, wallInfo.y1);
+            glm::vec3 v2 = glm::vec3(wallInfo.x2, 0, wallInfo.y2);
+            glm::vec3 v3 = glm::vec3(wallInfo.x2, 3, wallInfo.y2);
+            glm::vec3 v4 = glm::vec3(wallInfo.x1, 3, wallInfo.y1);
+
+            face.vertices.push_back(v1);
+            face.vertices.push_back(v2);
+            face.vertices.push_back(v3);
+            face.vertices.push_back(v4);
+            face.normal = glm::normalize(glm::cross(face.vertices[1] - face.vertices[0], face.vertices[2] - face.vertices[0]));
+            face.uAxis = glm::normalize(glm::cross(kWorldUp, face.normal));
+            face.vAxis = glm::normalize(glm::cross(face.normal, face.uAxis));
+        }
+
+        // Create floor and ceiling for the sector
         Face floorFace;
-        floorFace.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-        floorFace.uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
-        floorFace.vAxis = glm::vec3(0.0f, 0.0f, -1.0f);
+        floorFace.normal = glm::vec3(0.0f, 1.0f,  0.0f);
+        floorFace.uAxis  = glm::vec3(1.0f, 0.0f,  0.0f);
+        floorFace.vAxis  = glm::vec3(0.0f, 0.0f, -1.0f);
 
         Face ceilingFace;
         ceilingFace.normal = glm::vec3(0.0f, -1.0f, 0.0f);
-        ceilingFace.uAxis = glm::vec3(1.0f, 0.0f, 0.0f);
-        ceilingFace.vAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+        ceilingFace.uAxis  = glm::vec3(1.0f,  0.0f, 0.0f);
+        ceilingFace.vAxis  = glm::vec3(0.0f,  0.0f, 1.0f);
 
-        for (const Face& face : faces)
+        for (const Face& face : sectorFaces)
         {
             floorFace.vertices.push_back(face.vertices[0]);
             ceilingFace.vertices.push_back(face.vertices[0] + glm::vec3(0.0f, 3.0f, 0.0f));
@@ -553,11 +609,10 @@ int main(int argc, char** argv)
         // revert the order of the ceiling face
         std::reverse(floorFace.vertices.begin(), floorFace.vertices.end());
 
-        faces.push_back(floorFace);
-        faces.push_back(ceilingFace);
+        sectorFaces.push_back(floorFace);
+        sectorFaces.push_back(ceilingFace);
+        faces.insert(faces.end(), sectorFaces.begin(), sectorFaces.end());
     }
-
-    fclose(fp);
 
     Light light = {};
     light.position = glm::vec3(3.0f, 2.0f, 3.0f);

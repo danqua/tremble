@@ -3,6 +3,7 @@
 #include <glm/gtx/intersect.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -12,8 +13,12 @@
 
 #include <algorithm>
 #include <vector>
+#include <functional>
 
 #include "Math/Box.h"
+#include "Math/Ray.h"
+#include "Math/Frustum.h"
+#include "Math/Intersection.h"
 
 constexpr glm::vec3 kWorldUp      = glm::vec3(0.0f,  1.0f,  0.0f);
 constexpr glm::vec3 kWorldForward = glm::vec3(0.0f,  0.0f, -1.0f);
@@ -56,12 +61,6 @@ struct Quad
     glm::vec3 normal;
     float width;
     float height;
-};
-
-struct Ray
-{
-    glm::vec3 origin;
-    glm::vec3 direction;
 };
 
 struct Face
@@ -202,6 +201,36 @@ void DrawQuadLines(const Quad& quad, const glm::vec3& color = glm::vec3(1.0f))
     glVertex3f(v[1].x, v[1].y, v[1].z);
     glVertex3f(v[2].x, v[2].y, v[2].z);
     glVertex3f(v[3].x, v[3].y, v[3].z);
+    glEnd();
+}
+
+void DrawBoxLines(const Box& box, const glm::vec3& color = glm::vec3(1.0f))
+{
+    std::array<glm::vec3, 8> v;
+    box.GetCornerPoints(v);
+
+    int indices[] = {
+        0, 1,
+        1, 3,
+        3, 2,
+        2, 0,
+        0, 4,
+        1, 5,
+        3, 7,
+        2, 6,
+        4, 5,
+        5, 7,
+        7, 6,
+        6, 4,
+    };
+
+    glBegin(GL_LINES);
+    glColor3f(color.r, color.g, color.b);
+
+    for (int i = 0; i < 24; i++)
+    {
+        glVertex3f(v[indices[i]].x, v[indices[i]].y, v[indices[i]].z);
+    }
     glEnd();
 }
 
@@ -435,6 +464,51 @@ GLuint CreateTextureFromImage(const uint32_t* pixels, int width, int height)
     return texture;
 }
 
+void DrawQuadFromLine(const glm::vec3& v1, const glm::vec3& v2, float floorHeight, float ceilingHeight, const glm::vec3& color = glm::vec3(1.0f))
+{
+    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 right = glm::normalize(glm::cross(v2 - v1, up));
+
+    glm::vec3 v[4] = {
+        v1 + up * ceilingHeight,
+        v2 + up * ceilingHeight,
+        v2 + up * floorHeight,
+        v1 + up * floorHeight
+    };
+
+    glBegin(GL_TRIANGLE_FAN);
+    glColor3f(color.r, color.g, color.b);
+    glVertex3f(v[0].x, v[0].y, v[0].z);
+    glVertex3f(v[1].x, v[1].y, v[1].z);
+    glVertex3f(v[2].x, v[2].y, v[2].z);
+    glVertex3f(v[3].x, v[3].y, v[3].z);
+    glEnd();
+}
+
+// Creates a box that encloses all the vertices of a quad and adds padding
+Box GetQuadBoundingBox(const Quad& quad, float padding)
+{
+    glm::vec3 v[4];
+    GetQuadVertices(quad, v);
+
+    Box box;
+    box.min = glm::vec3(FLT_MAX);
+    box.max = glm::vec3(-FLT_MAX);
+
+    for (int i = 0; i < 4; i++)
+    {
+        box.min = glm::min(box.min, v[i]);
+        box.max = glm::max(box.max, v[i]);
+    }
+
+    box.min -= glm::vec3(padding);
+    box.max += glm::vec3(padding);
+
+    return box;
+}
+
+bool PointInPolygon(const glm::vec3& point, const glm::vec3* vertices, int numVertices);
+
 #include <stdio.h>
 
 #include <fstream>
@@ -514,298 +588,217 @@ int main(int argc, char** argv)
     camera.aspect = 640.0f / 480.0f;
     camera.near = 0.1f;
     camera.far = 1000.0f;
-    camera.position = glm::vec3(0.0f, 1.0f, 3.0f);
+    camera.position = glm::vec3(2.0f, 1.0f, -3.0f);
 
     Movement movement = {};
     movement.speed = 10.0f;
     movement.friction = 6.0f;
     movement.mouseSensitivity = 0.1f;
 
-    Math::Box box(glm::vec3(0.0f), 2.0f);
-    std::array<glm::vec3, 8> boxPoints;
-    box.GetCornerPoints(boxPoints);
-
-    std::vector<Face> faces;
-
-    struct SectorInfo
+    struct Sector
     {
-        int wallIndex;
+        int firstWall;
         int numWalls;
-        int numPortals;
-        int* portals;
+        float floorHeight;
+        float ceilingHeight;
+    };
 
-        bool IsPortal(int index) const
+    struct Wall
+    {
+        int v[2];
+        int sector;
+    };
+
+    std::vector<glm::vec2> wallVertices = {
+        glm::vec2( 0.0f, 0.0f),
+        glm::vec2( 4.0f, 0.0f),
+        glm::vec2( 5.0f, 2.0f),
+        glm::vec2( 7.0f, 2.0f),
+        glm::vec2( 7.0f, 4.0f),
+        glm::vec2( 5.0f, 4.0f),
+        glm::vec2( 4.0f, 6.0f),
+        glm::vec2( 0.0f, 6.0f),
+        glm::vec2( 9.0f, 1.0f),
+        glm::vec2(11.0f, 1.0f),
+        glm::vec2(11.0f, 3.0f),
+        glm::vec2( 9.0f, 3.0f)
+    };
+
+    std::vector<Sector> sectors = {
+        {  0, 6,  0.0f, 3.0f },
+        {  6, 4, 0.25f, 2.0f },
+        { 10, 4,  0.5f, 3.0f },
+        { 14, 4,  0.75f, 3.0f }
+    };
+
+    std::vector<Wall> walls = {
+        { {  0,  1 }, -1 },
+        { {  1,  2 }, -1 },
+        { {  2,  5 },  1 },
+        { {  5,  6 }, -1 },
+        { {  6,  7 }, -1 },
+        { {  7,  0 }, -1 },
+        { {  2,  3 }, -1 },
+        { {  3,  4 },  2 },
+        { {  4,  5 }, -1 },
+        { {  5,  2 },  0 },
+        { {  3,  8 }, -1 },
+        { {  8, 11 },  3 },
+        { { 11,  4 }, -1 },
+        { {  4,  3 },  1 },
+        { {  8,  9 }, -1 },
+        { {  9, 10 }, -1 },
+        { { 10, 11 }, -1 },
+        { { 11,  8 },  2 },
+    };
+
+    glm::vec3 randomColors[16] = {
+        glm::vec3(0.6f, 0.8f, 0.8f),
+        glm::vec3(0.7f, 0.7f, 1.0f),
+        glm::vec3(0.6f, 0.8f, 0.7f),
+        glm::vec3(0.7f, 0.9f, 0.9f),
+        glm::vec3(0.7f, 1.0f, 1.0f),
+        glm::vec3(0.8f, 0.6f, 0.8f),
+        glm::vec3(0.8f, 0.6f, 1.0f),
+        glm::vec3(1.0f, 0.6f, 1.0f),
+        glm::vec3(0.8f, 0.6f, 0.8f),
+        glm::vec3(0.9f, 0.5f, 0.7f),
+        glm::vec3(0.8f, 0.8f, 0.7f),
+        glm::vec3(0.8f, 0.7f, 0.5f),
+        glm::vec3(0.9f, 0.7f, 0.9f),
+        glm::vec3(0.5f, 1.0f, 0.7f),
+        glm::vec3(0.7f, 1.0f, 0.8f),
+        glm::vec3(0.8f, 0.9f, 0.7f)
+    };
+
+    auto PointInSector = [=](const glm::vec3& point, const Sector& sector) {
+
+        std::vector<glm::vec3> vertices;
+
+        for (int i = 0; i < sector.numWalls; ++i)
         {
-            for (int i = 0; i < numPortals; i++)
-            {
-                if (portals[i] == index)
-                {
-                    return true;
-                }
-            }
-            return false;
+            const Wall& wall = walls[sector.firstWall + i];
+
+            glm::vec2 v[2] = {
+                wallVertices[wall.v[0]],
+                wallVertices[wall.v[1]]
+            };
+
+            glm::vec3 v3[2] = {
+                glm::vec3(v[0].x, 0.0f, -v[0].y),
+                glm::vec3(v[1].x, 0.0f, -v[1].y)
+            };
+
+            vertices.push_back(v3[0]);
         }
+
+        return PointInPolygon(point, vertices.data(), vertices.size());
     };
 
-    struct WallInfo
+    int wallIndex = 0;
+
+    int drawnSectors = 0;
+    auto DrawSector = [&](const Sector& sector)
     {
-        int x1;
-        int y1;
-        int x2;
-        int y2;
+
+        for (int i = 0; i < sector.numWalls; ++i)
+        {
+            const Wall& wall = walls[sector.firstWall + i];
+            glm::vec2 v2[2] = { wallVertices[wall.v[0]], wallVertices[wall.v[1]] };
+            glm::vec3 v3[2] = { glm::vec3(v2[0].x, 0.0f, -v2[0].y), glm::vec3(v2[1].x, 0.0f, -v2[1].y) };
+
+            glm::vec3 color = randomColors[wallIndex++ % 16];
+            if (wall.sector != -1)
+            {
+                const Sector& otherSector = sectors[wall.sector];
+                if (otherSector.floorHeight > sector.floorHeight)
+                {
+                    DrawQuadFromLine(v3[0], v3[1], sector.floorHeight, otherSector.floorHeight, color);
+                }
+                if (otherSector.ceilingHeight < sector.ceilingHeight)
+                {
+                    DrawQuadFromLine(v3[0], v3[1], otherSector.ceilingHeight, sector.ceilingHeight, color);
+                }
+                continue;
+            }
+
+            DrawQuadFromLine(v3[0], v3[1], sector.floorHeight, sector.ceilingHeight, color);
+        }
+
+        std::vector<glm::vec3> vertices;
+        for (int i = 0; i < sector.numWalls; ++i)
+        {
+            const Wall& wall = walls[sector.firstWall + i];
+            glm::vec2 v2[2] = { wallVertices[wall.v[0]], wallVertices[wall.v[1]] };
+            glm::vec3 v3[2] = { glm::vec3(v2[0].x, sector.floorHeight, -v2[0].y), glm::vec3(v2[1].x, sector.floorHeight, -v2[1].y) };
+            vertices.push_back(v3[0]);
+        }
+
+        DrawPolygon(vertices.data(), vertices.size(), randomColors[wallIndex++ % 16]);
+
+        std::reverse(vertices.begin(), vertices.end());
+        for (glm::vec3& vertex : vertices)
+        {
+            vertex.y = sector.ceilingHeight;
+        }
+        DrawPolygon(vertices.data(), vertices.size(), randomColors[wallIndex++ % 16]);
+
+        drawnSectors++;
     };
-
-    std::vector<SectorInfo> sectorInfos;
-    std::vector<WallInfo> wallInfos;
-
-    enum class ParseState
-    {
-        None,
-        Sector,
-        Wall,
-    };
-
-    ParseState parseState = ParseState::None;
-
-
-    std::ifstream fs("map.txt");
     
-    std::string line;
-
-    while (std::getline(fs, line))
+    std::function<void(const Sector&, std::vector<const Sector*>&)> MarkSectorsVisible = [&](const Sector& sector, std::vector<const Sector*>& visibleSectors)
     {
-        if (line.find("[sectors]") != std::string::npos)
-        {
-            parseState = ParseState::Sector;
-        }
-        else if (line.find("[walls]") != std::string::npos)
-        {
-            parseState = ParseState::Wall;
-        }
-        else if (line[0] == '#')
-        {
-            continue;
-        }
-        else
-        {
-            if (line.empty())
-            {
-                continue;
-            }
-            if (parseState == ParseState::Sector)
-            {
-                SectorInfo& sectorInfo = sectorInfos.emplace_back();
-                std::stringstream ss(line);
-                ss >> sectorInfo.wallIndex >> sectorInfo.numWalls >> sectorInfo.numPortals;
+        visibleSectors.push_back(&sector);
 
-                if (sectorInfo.numPortals > 0)
+        for (int i = 0; i < sector.numWalls; ++i)
+        {
+            const Wall& wall = walls[sector.firstWall + i];
+
+            glm::vec2 v2[2] = {
+                wallVertices[wall.v[0]],
+                wallVertices[wall.v[1]]
+            };
+
+            glm::vec3 v3[2] = {
+                glm::vec3(v2[0].x, 0.0f, -v2[0].y),
+                glm::vec3(v2[1].x, 0.0f, -v2[1].y)
+            };
+
+            glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+            glm::vec3 right = glm::normalize(glm::cross(v3[1] - v3[0], up));
+            glm::vec3 normal = glm::cross(right, up);
+            float ceilingHeight = 2.0f;
+            float floorHeight = 0.0f;
+
+            glm::vec3 v[4] = {
+                v3[0] + up * ceilingHeight,
+                v3[1] + up * ceilingHeight,
+                v3[1] + up * floorHeight,
+                v3[0] + up * floorHeight
+            };
+
+            Box box(v, 4);
+            box.Expand(right * 0.05f);
+
+            if (wall.sector != -1)
+            {
+                if (std::find(visibleSectors.begin(), visibleSectors.end(), &sectors[wall.sector]) != visibleSectors.end())
                 {
-                    sectorInfo.portals = new int[sectorInfo.numPortals];
-                    for (int i = 0; i < sectorInfo.numPortals; i++)
-                    {
-                        ss >> sectorInfo.portals[i];
-                    }
+                    continue;
                 }
-            }
-            else if (parseState == ParseState::Wall)
-            {
-                WallInfo& wallInfo = wallInfos.emplace_back();
-                std::stringstream ss(line);
-                ss >> wallInfo.x1 >> wallInfo.y1 >> wallInfo.x2 >> wallInfo.y2;
-            }
-        }
-    }
 
-    for (const SectorInfo& sectorInfo : sectorInfos)
-    {
-        std::vector<Face> sectorFaces;
-        for (int i = 0; i < sectorInfo.numWalls; i++)
-        {
-            if (sectorInfo.IsPortal(sectorInfo.wallIndex + i))
-            {
-                continue;
-            }
+                glm::mat4 projectionMatrix = GetProjection(camera);
+                glm::mat4 viewMatrix = GetView(camera);
+                Frustum frustum(projectionMatrix * viewMatrix);
 
-            Face& face = sectorFaces.emplace_back();
-            const WallInfo& wallInfo = wallInfos[sectorInfo.wallIndex + i];
-
-            glm::vec3 v1 = glm::vec3(wallInfo.x1, 0, wallInfo.y1);
-            glm::vec3 v2 = glm::vec3(wallInfo.x2, 0, wallInfo.y2);
-            glm::vec3 v3 = glm::vec3(wallInfo.x2, 3, wallInfo.y2);
-            glm::vec3 v4 = glm::vec3(wallInfo.x1, 3, wallInfo.y1);
-
-            face.vertices.push_back(v1);
-            face.vertices.push_back(v2);
-            face.vertices.push_back(v3);
-            face.vertices.push_back(v4);
-            face.normal = glm::normalize(glm::cross(face.vertices[1] - face.vertices[0], face.vertices[2] - face.vertices[0]));
-            face.uAxis = glm::normalize(glm::cross(kWorldUp, face.normal));
-            face.vAxis = glm::normalize(glm::cross(face.normal, face.uAxis));
-        }
-
-        // Skip floor/ceiling generation for now
-
-        // Create floor and ceiling for the sector
-        Face floorFace;
-        floorFace.normal = glm::vec3(0.0f, 1.0f,  0.0f);
-        floorFace.uAxis  = glm::vec3(1.0f, 0.0f,  0.0f);
-        floorFace.vAxis  = glm::vec3(0.0f, 0.0f, -1.0f);
-
-        Face ceilingFace;
-        ceilingFace.normal = glm::vec3(0.0f, -1.0f, 0.0f);
-        ceilingFace.uAxis  = glm::vec3(1.0f,  0.0f, 0.0f);
-        ceilingFace.vAxis  = glm::vec3(0.0f,  0.0f, 1.0f);
-
-        for (const Face& face : sectorFaces)
-        {
-            floorFace.vertices.push_back(face.vertices[0]);
-            ceilingFace.vertices.push_back(face.vertices[0] + glm::vec3(0.0f, 3.0f, 0.0f));
-        }
-
-        // revert the order of the ceiling face
-        std::reverse(floorFace.vertices.begin(), floorFace.vertices.end());
-
-        sectorFaces.push_back(floorFace);
-        sectorFaces.push_back(ceilingFace);
-
-        faces.insert(faces.end(), sectorFaces.begin(), sectorFaces.end());
-    }
-
-    Light light = {};
-    light.position = glm::vec3(3.0f, 2.0f, 3.0f);
-    light.color = glm::vec3(1.0f);
-    light.intensity = 4.0f;
-
-    std::vector<Image> images;
-    std::vector<Texture> textures;
-
-    int faceIndex = 0;
-    for (const Face& face : faces)
-    {
-        glm::vec3 min = glm::vec3(FLT_MAX);
-        glm::vec3 max = glm::vec3(-FLT_MAX);
-
-        for (const glm::vec3& vertex : face.vertices)
-        {
-            min = glm::min(min, vertex);
-            max = glm::max(max, vertex);
-        }
-
-        float width  = glm::abs(glm::dot(face.uAxis, max - min));
-        float height = glm::abs(glm::dot(face.vAxis, max - min));
-
-        std::vector<glm::vec3> luxels;
-
-
-        float unit = 0.125f;
-
-        int texWidth = 0;
-        int texHeight = 0;
-
-
-        for (float v = -unit; v < height + unit; v += unit)
-        {
-            for (float u = -unit; u < width + unit; u += unit)
-            {
-                glm::vec3 luxel = face.vertices[0] + (face.uAxis * u + face.vAxis * v);
-                luxels.push_back(luxel);
-
-                if (texHeight == 0)
+                if (frustum.IntersectsBox(box))
                 {
-                    texWidth++;
-                }
-            }
-            texHeight++;
-        }
-
-        // Create image for luxels
-        Image& image = images.emplace_back();
-        image.width = texWidth;
-        image.height = texHeight;
-        image.pixels = new uint32_t[texWidth * texHeight];
-
-        int pixelIndex = 0;
-        for (const glm::vec3& luxel : luxels)
-        {
-            Ray ray = {};
-            ray.origin = light.position;
-            ray.direction = luxel - light.position;
-
-            glm::vec3 point;
-            if (RayPolygonIntersection(ray, face.vertices.data(), face.vertices.size(), point))
-            {
-                float attenuation = 1.0f / glm::dot(point - light.position, point - light.position) * light.intensity;
-                uint32_t color = glm::packUnorm4x8(glm::vec4(light.color * attenuation, 1.0f));
-                image.pixels[pixelIndex] = color;
-            }
-            else
-            {
-                float attenuation = 1.0f / glm::dot(luxel - light.position, luxel - light.position) * light.intensity;
-                uint32_t color = glm::packUnorm4x8(glm::vec4(light.color * attenuation, 1.0f));
-                image.pixels[pixelIndex] = color;
-                //pixels[pixelIndex] = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-            }
-            pixelIndex++;
-        }
-
-        // Save texture to file
-        //char filename[256];
-        //sprintf(filename, "textures/%d.png", faceIndex++);
-        //stbi_write_png(filename, texWidth, texHeight, 4, pixels.data(), texWidth * 4);
-        /*
-        Texture& texture = textures.emplace_back();
-        texture.width = texWidth;
-        texture.height = texHeight;
-        texture.id = CreateTextureFromImage(pixels.data(), texWidth, texHeight);
-        */
-    }
-
-    // Create textures from images
-    for (const Image& image : images)
-    {
-        Texture& texture = textures.emplace_back();
-        texture.width = image.width;
-        texture.height = image.height;
-        texture.id = CreateTextureFromImage(image.pixels, image.width, image.height);
-    }
-
-    stbrp_rect* rects = new stbrp_rect[images.size()];
-    for (auto i = 0; i < images.size(); i++)
-    {
-        rects[i].id = i;
-        rects[i].w = images[i].width;
-        rects[i].h = images[i].height;
-    }
-
-    int numNodes = 1024;
-
-    stbrp_context context;
-    stbrp_node* nodes = new stbrp_node[numNodes];
-    stbrp_init_target(&context, 1024, 1024, nodes, numNodes);
-    stbrp_pack_rects(&context, rects, images.size());
-
-    uint32_t* atlas = new uint32_t[1024 * 1024];
-    for (auto i = 0; i < 1024 * 1024; i++)
-    {
-        atlas[i] = glm::packUnorm4x8(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-    }
-
-    for (auto i = 0; i < images.size(); i++)
-    {
-        if (rects[i].was_packed)
-        {
-            for (auto y = 0; y < images[i].height; y++)
-            {
-                for (auto x = 0; x < images[i].width; x++)
-                {
-                    atlas[(rects[i].y + y) * 1024 + (rects[i].x + x)] = images[i].pixels[y * images[i].width + x];
+                    MarkSectorsVisible(sectors[wall.sector], visibleSectors);
                 }
             }
         }
-    }
-
-    stbi_write_png("textures/atlas.png", 1024, 1024, 4, atlas, 1024 * 4);
-    //stbi_write_jpg("textures/atlas.jpg", 1024, 1024, 4, atlas, 100);
+    };
+    
 
     /* Loop until the user closes the window */
     while (!glfwWindowShouldClose(window))
@@ -833,45 +826,29 @@ int main(int argc, char** argv)
         glLoadIdentity();
         glLoadMatrixf(glm::value_ptr(viewMatrix));
         
-        /*
-        for (const glm::vec3& luxel : luxels)
-        {
-            Ray ray = {};
-            ray.origin = light.position;
-            ray.direction = luxel - light.position;
+        glViewport(0, 0, windowWidth, windowHeight);
 
-            glm::vec3 point;
-            if (RayPolygonIntersection(ray, face.vertices.data(), face.vertices.size(), point))
+        drawnSectors = 0;
+        wallIndex = 0;
+
+
+        std::vector<const Sector*> visibleSectors;
+        for (const Sector& sector : sectors)
+        {
+            if (PointInSector(camera.position, sector))
             {
-                float attenuation = 1.0f / glm::dot(point - light.position, point - light.position);
-                DrawPoint(point, glm::vec3(attenuation), 10.0f);
+                MarkSectorsVisible(sector, visibleSectors);
+                break;
             }
         }
-        */
-        // Draw surface
-        int textureIndex = 0;
-        for (const Face& face : faces)
+
+
+        for (const Sector* sector : visibleSectors)
         {
-
-
-            /*if (textureIndex == 5)
-            {
-                DrawPolygonLines(face.vertices.data(), face.vertices.size(), glm::vec3(1.0f, 1.0f, 0.0f));
-            }*/
-            DrawTexturedFace(face, textures[textureIndex]);
-            //DrawPolygonLines(face.vertices.data(), face.vertices.size());
-            textureIndex++;
-            //DrawTexturedPolygon(face.vertices, textures[textureIndex++]); 
-            //DrawPolygonLines(face.vertices.data(), face.vertices.size());
-
+            DrawSector(*sector);
         }
-        
+        printf("Sectors: %d\n", drawnSectors);
 
-        
-
-        DrawPoint(light.position, light.color, 10.0f);
-
-        DrawPoints(boxPoints.data(), boxPoints.size(), glm::vec3(1.0f, 0.0f, 1.0f), 10.0f);
 
         glfwSwapBuffers(window);
 
@@ -881,4 +858,22 @@ int main(int argc, char** argv)
 
     glfwTerminate();
     return 0;
+}
+
+
+
+bool PointInPolygon(const glm::vec3& point, const glm::vec3* vertices, int numVertices)
+{
+    glm::vec3 p = point;
+
+    int i, j, c = 0;
+    for (i = 0, j = numVertices - 1; i < numVertices; j = i++)
+    {
+        if (((vertices[i].z > p.z) != (vertices[j].z > p.z)) &&
+            (p.x < (vertices[j].x - vertices[i].x) * (p.z - vertices[i].z) / (vertices[j].z - vertices[i].z) + vertices[i].x))
+        {
+            c = !c;
+        }
+    }
+    return c;
 }

@@ -1,7 +1,5 @@
 #include "Ray.h"
 
-using namespace Math;
-
 Ray::Ray()
     : origin(std::numeric_limits<float>::quiet_NaN())
     , direction(std::numeric_limits<float>::quiet_NaN())

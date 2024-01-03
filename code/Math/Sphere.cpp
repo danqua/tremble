@@ -1,7 +1,5 @@
 #include "Sphere.h"
 
-using namespace Math;
-
 Sphere::Sphere()
     : center(std::numeric_limits<float>::quiet_NaN())
     , radius(std::numeric_limits<float>::quiet_NaN())

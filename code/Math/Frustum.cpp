@@ -1,7 +1,5 @@
 #include "Frustum.h"
 
-using namespace Math;
-
 Frustum::Frustum()
 {
 }
@@ -57,7 +55,7 @@ bool Frustum::ContainsPoint(const glm::vec3& point) const
     return true;
 }
 
-bool Math::Frustum::ContainsSphere(const Sphere& sphere) const
+bool Frustum::ContainsSphere(const Sphere& sphere) const
 {
     for (int i = 0; i < 6; ++i)
     {
@@ -70,7 +68,7 @@ bool Math::Frustum::ContainsSphere(const Sphere& sphere) const
     return true;
 }
 
-bool Math::Frustum::ContainsBox(const Box& box) const
+bool Frustum::ContainsBox(const Box& box) const
 {
     std::array<glm::vec3, 8> cornerVertices;
     box.GetCornerPoints(cornerVertices);
@@ -78,6 +76,33 @@ bool Math::Frustum::ContainsBox(const Box& box) const
     for (int i = 0; i < 8; ++i)
     {
         if (ContainsPoint(cornerVertices[i]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool Frustum::IntersectsBox(const Box& box) const
+{
+    std::array<glm::vec3, 8> cornerVertices;
+    box.GetCornerPoints(cornerVertices);
+
+    for (int i = 0; i < 6; ++i)
+    {
+        bool inside = false;
+
+        for (int j = 0; j < 8; ++j)
+        {
+            if (planes[i].GetClosestDistanceToPoint(cornerVertices[j]) >= 0.0f)
+            {
+                inside = true;
+                break;
+            }
+        }
+
+        if (!inside)
         {
             return false;
         }

@@ -1,8 +1,6 @@
 #include "Box.h"
 #include <glm/gtx/component_wise.hpp>
 
-using namespace Math;
-
 Box::Box()
     : min(std::numeric_limits<float>::quiet_NaN())
     , max(std::numeric_limits<float>::quiet_NaN())
@@ -57,6 +55,26 @@ Box& Box::operator+=(const glm::vec3& point)
         min = point;
         max = point;
         isValid = true;
+    }
+    return *this;
+}
+
+Box& Box::operator*=(float scalar)
+{
+    if (isValid)
+    {
+        min *= scalar;
+        max *= scalar;
+    }
+    return *this;
+}
+
+Box& Box::Expand(const glm::vec3& amount)
+{
+    if (isValid)
+    {
+        min -= amount;
+        max += amount;
     }
     return *this;
 }

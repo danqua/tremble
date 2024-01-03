@@ -1,7 +1,5 @@
 #include "Plane.h"
 
-using namespace Math;
-
 Plane::Plane()
     : normal(0.0f, 0.0f, 0.0f)
     , distance(0.0f)

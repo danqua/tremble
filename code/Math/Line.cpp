@@ -1,7 +1,5 @@
 #include "Line.h"
 
-using namespace Math;
-
 Line::Line()
     : v1(std::numeric_limits<float>::quiet_NaN())
     , v2(std::numeric_limits<float>::quiet_NaN())

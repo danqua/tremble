@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "Math/Box.h"
+
 constexpr glm::vec3 kWorldUp      = glm::vec3(0.0f,  1.0f,  0.0f);
 constexpr glm::vec3 kWorldForward = glm::vec3(0.0f,  0.0f, -1.0f);
 constexpr glm::vec3 kWorldRight   = glm::vec3(1.0f,  0.0f,  0.0f);
@@ -138,6 +140,23 @@ void DrawPoint(const glm::vec3& point, const glm::vec3& color = glm::vec3(1.0f),
     glBegin(GL_POINTS);
     glColor3f(color.r, color.g, color.b);
     glVertex3f(point.x, point.y, point.z);
+    glEnd();
+
+    glPointSize(currentPointSize);
+}
+
+void DrawPoints(const glm::vec3* points, size_t count, const glm::vec3& color = glm::vec3(1.0f), float size = 1.0f)
+{
+    float currentPointSize = 0.0f;
+    glGetFloatv(GL_POINT_SIZE, &currentPointSize);
+
+    glPointSize(size);
+    glBegin(GL_POINTS);
+    glColor3f(color.r, color.g, color.b);
+    for (size_t i = 0; i < count; i++)
+    {
+        glVertex3f(points[i].x, points[i].y, points[i].z);
+    }
     glEnd();
 
     glPointSize(currentPointSize);
@@ -502,6 +521,9 @@ int main(int argc, char** argv)
     movement.friction = 6.0f;
     movement.mouseSensitivity = 0.1f;
 
+    Math::Box box(glm::vec3(0.0f), 2.0f);
+    std::array<glm::vec3, 8> boxPoints;
+    box.GetCornerPoints(boxPoints);
 
     std::vector<Face> faces;
 
@@ -848,6 +870,8 @@ int main(int argc, char** argv)
         
 
         DrawPoint(light.position, light.color, 10.0f);
+
+        DrawPoints(boxPoints.data(), boxPoints.size(), glm::vec3(1.0f, 0.0f, 1.0f), 10.0f);
 
         glfwSwapBuffers(window);
 

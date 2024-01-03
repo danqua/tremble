@@ -28,11 +28,6 @@ bool Math::Intersects(const Box& a, const Sphere& b)
     return false;
 }
 
-bool Math::Intersects(const Sphere& a, const Box& b)
-{
-    return Intersects(b, a);
-}
-
 bool Math::Intersects(const Ray& ray, const Box& box)
 {
     if (box.isValid)
@@ -47,11 +42,6 @@ bool Math::Intersects(const Ray& ray, const Box& box)
         return t0max <= t1min;
     }
     return false;
-}
-
-bool Math::Intersects(const Box& box, const Ray& ray)
-{
-    return Intersects(ray, box);
 }
 
 bool Math::Intersects(const Ray& ray, const Sphere& sphere)
@@ -73,11 +63,6 @@ bool Math::Intersects(const Ray& ray, const Sphere& sphere)
         return true;
     }
     return false;
-}
-
-bool Math::Intersects(const Sphere& sphere, const Ray& ray)
-{
-    return Intersects(ray, sphere);
 }
 
 bool Math::Intersects(const Line& a, const Line& b)
@@ -102,4 +87,80 @@ bool Math::Intersects(const Line& a, const Line& b)
     float t = (a1 * c2 - a2 * c1) / det;
 
     return s >= 0.0f && s <= 1.0f && t >= 0.0f && t <= 1.0f;
+}
+
+bool Math::Intersects(const Line& line, const Sphere& sphere)
+{
+    return Intersects(sphere, line);
+}
+
+bool Math::Intersects(const Sphere& sphere, const Line& line)
+{
+    if (!std::isnan(sphere.radius))
+    {
+        glm::vec3 m = line.v1 - sphere.center;
+        float b = glm::dot(m, line.v2 - line.v1);
+        float c = glm::dot(m, m) - sphere.radius * sphere.radius;
+        if (c > 0.0f && b > 0.0f)
+        {
+            return false;
+        }
+        float discr = b * b - c;
+        if (discr < 0.0f)
+        {
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool Math::Intersects(const Line& line, const Box& box)
+{
+    return Intersects(box, line);
+}
+
+bool Math::Intersects(const Box& box, const Line& line)
+{
+    if (box.isValid)
+    {
+        glm::vec3 invDir = 1.0f / (line.v2 - line.v1);
+        glm::vec3 t0 = (box.min - line.v1) * invDir;
+        glm::vec3 t1 = (box.max - line.v1) * invDir;
+        glm::vec3 tmin = glm::min(t0, t1);
+        glm::vec3 tmax = glm::max(t0, t1);
+        float t0max = glm::compMax(tmin);
+        float t1min = glm::compMin(tmax);
+        return t0max <= t1min;
+    }
+    return false;
+}
+
+bool Math::Intersects(const Line& line, const Plane& plane)
+{
+    return (plane.GetPointSide(line.v1) + plane.GetPointSide(line.v2)) == 0;
+}
+
+bool Math::Intersects(const Plane& plane, const Line& line)
+{
+    return Intersects(line, plane);
+}
+
+bool Math::Intersects(const Line& line, const Frustum& frustum)
+{
+    return Intersects(frustum, line);
+}
+
+bool Math::Intersects(const Frustum& frustum, const Line& line)
+{
+    for (int i = 0; i < 6; ++i)
+    {
+        const Plane& plane = frustum.planes[i];
+        if (Intersects(plane, line))
+        {
+            return true;
+        }
+    }
+    
+    return false;
 }

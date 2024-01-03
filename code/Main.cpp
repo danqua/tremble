@@ -707,7 +707,10 @@ int main(int argc, char** argv)
             glm::vec2 v2[2] = { wallVertices[wall.v[0]], wallVertices[wall.v[1]] };
             glm::vec3 v3[2] = { glm::vec3(v2[0].x, 0.0f, -v2[0].y), glm::vec3(v2[1].x, 0.0f, -v2[1].y) };
 
+            glm::vec3 normal = glm::normalize(glm::cross(v3[1] - v3[0], glm::vec3(0.0f, 1.0f, 0.0f)));
+
             glm::vec3 color = randomColors[wallIndex++ % 16];
+            color = glm::vec3(glm::dot(glm::vec3(0.8f, 0.65f, 0.9f), glm::abs(normal)));
             if (wall.sector != -1)
             {
                 const Sector& otherSector = sectors[wall.sector];
@@ -734,14 +737,17 @@ int main(int argc, char** argv)
             vertices.push_back(v3[0]);
         }
 
-        DrawPolygon(vertices.data(), vertices.size(), randomColors[wallIndex++ % 16]);
+        glm::vec3 color = glm::vec3(glm::dot(glm::vec3(0.8f, 0.65f, 0.9f), glm::vec3(0.0f, 1.0f, 0.0f)));
+
+        
+        DrawPolygon(vertices.data(), vertices.size(), color);
 
         std::reverse(vertices.begin(), vertices.end());
         for (glm::vec3& vertex : vertices)
         {
             vertex.y = sector.ceilingHeight;
         }
-        DrawPolygon(vertices.data(), vertices.size(), randomColors[wallIndex++ % 16]);
+        DrawPolygon(vertices.data(), vertices.size(), color);
 
         drawnSectors++;
     };

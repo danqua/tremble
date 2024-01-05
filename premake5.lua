@@ -21,15 +21,16 @@ project "Tremble"
         "code",
         "extern/glfw/include",
         "extern/glm",
-        "extern/stb"
+        "extern/stb",
+        "extern/glad/include"
     }
     files {
         "code/**.h",
-        "code/**.cpp"
+        "code/**.cpp",
+        "extern/glad/src/glad.c"
     }
     links {
-        "GLFW",
-        "OpenGL32"
+        "GLFW"
     }
 
     disablewarnings {

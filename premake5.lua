@@ -11,7 +11,7 @@ workspace "Tremble"
     targetdir ("bin/%{prj.name}")
     objdir ("bin/obj/%{prj.name}")
 
-include "extern/glfw.lua"
+--include "extern/glfw.lua"
 
 project "Tremble"
     kind "ConsoleApp"
@@ -19,7 +19,7 @@ project "Tremble"
     cppdialect "C++20"
     includedirs {
         "code",
-        "extern/glfw/include",
+        "extern/SDL/include",
         "extern/glm",
         "extern/stb",
         "extern/glad/include"
@@ -29,8 +29,14 @@ project "Tremble"
         "code/**.cpp",
         "extern/glad/src/glad.c"
     }
+    libdirs {
+		"extern/SDL/VisualC/x64/Release"
+    }
     links {
-        "GLFW"
+        "SDL3"
+    }
+    postbuildcommands {
+        "{COPY} extern/SDL/VisualC/x64/Release/SDL3.dll data"
     }
 
     disablewarnings {

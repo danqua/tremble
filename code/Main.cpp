@@ -38,6 +38,14 @@ struct Camera
     float pitch;
     float yaw;
     float roll;
+
+    void LookAt(const glm::vec3& target)
+    {
+        glm::vec3 direction = glm::normalize(target - position);
+        pitch = glm::degrees(glm::asin(direction.y));
+        yaw = glm::degrees(glm::atan(direction.z, direction.x)) + 90.0f;
+        int y = 0;
+    }
 };
 
 struct Movement
@@ -525,8 +533,6 @@ Box GetQuadBoundingBox(const Quad& quad, float padding)
     return box;
 }
 
-bool PointInPolygon(const glm::vec3& point, const glm::vec3* vertices, int numVertices);
-
 #include <stdio.h>
 
 #include <fstream>
@@ -555,12 +561,6 @@ struct Cell
 std::vector<Quad> CreateQuads(std::vector<Cell>& cells)
 {
     std::vector<Quad> quads;
-    std::unordered_map<const Cell*, bool> visited;
-
-    for (const Cell& cell : cells)
-    {
-        visited[&cell] = false;
-    }
 
     for (Cell& cell : cells)
     {
@@ -658,66 +658,17 @@ std::vector<glm::vec3> GenerateColors(size_t count)
 }
 
 
-int main(int argc, char** argv)
+std::vector<Cell> CreateCellsFromData(int* floorData, int* ceilingData, int width, int height)
 {
-    SDL_Init(SDL_INIT_VIDEO);
-
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-
-    SDL_Window* window = SDL_CreateWindow("Tremble", 1280, 720, SDL_WINDOW_OPENGL);
-    SDL_GLContext context = SDL_GL_CreateContext(window);
-    SDL_GL_MakeCurrent(window, context);
-    gladLoadGL();
-
-    SDL_SetRelativeMouseMode(SDL_TRUE);
-
-    Camera camera = {};
-    camera.fov = 70.0f;
-    camera.aspect = 1280.0f / 720.0f;
-    camera.near = 0.1f;
-    camera.far = 1000.0f;
-    camera.position = glm::vec3(2.0f, 1.0f, 3.0f);
-
-    Movement movement = {};
-    movement.speed = 20.0f;
-    movement.friction = 6.0f;
-    movement.mouseSensitivity = 0.1f;
-
-    const int mwidth = 8;
-    const int mheight = 8;
-    int floorData[] = {
-        -1, -1, -1,  -1, -1, -1, -1, -1,
-        -1,  0,  0,   0,  0, -1, -1, -1,
-        -1,  0, -8, -16,  0,  8,  8, -1,
-        -1,  0, -8, -16,  0,  8,  8, -1,
-        -1,  0,  0,   0,  0, -1, 16, -1,
-        -1,  0, 32,   0, -1, 16, 16, -1,
-        -1,  0,  0,   0, -1, 16, 16, -1,
-        -1, -1, -1,  -1, -1, -1, -1, -1
-    };
-
-    int ceilingData[] = {
-        -1,  -1,  -1,  -1, -1,   -1,  -1, -1,
-        -1, 128, 128, 128, 128,  -1,  -1, -1,
-        -1, 128, 128, 128, 128,  96, 132, -1,
-        -1, 128, 128, 128, 128,  96, 132, -1,
-        -1, 128, 128, 128, 128,  -1, 148, -1,
-        -1, 128, 128, 128,  -1, 148, 148, -1,
-        -1, 128, 128, 128,  -1, 148, 148, -1,
-        -1,  -1,  -1,  -1,  -1,  -1,  -1, -1
-    };
-
     std::vector<Cell> cells;
 
-    for (int y = 0; y < mheight; y++)
+    for (int y = 0; y < height; y++)
     {
-        for (int x = 0; x < mwidth; x++)
+        for (int x = 0; x < width; x++)
         {
             // Floor
-            int f = floorData[y * mwidth + x];
-            int c = ceilingData[y * mwidth + x];
+            int f = floorData[y * width + x];
+            int c = ceilingData[y * width + x];
 
             if (f == -1)
             {
@@ -758,12 +709,119 @@ int main(int argc, char** argv)
             }
         }
     }
+    return cells;
+}
 
+void CalculateCamerPosition(const std::vector<Cell>& cells, Camera& camera)
+{
+    glm::vec3 min = glm::vec3(std::numeric_limits<float>().max());
+    glm::vec3 max = glm::vec3(std::numeric_limits<float>().min());
+
+
+    for (const Cell& cell : cells)
+    {
+        min = glm::min(min, glm::vec3(cell.x, cell.floor, cell.y));
+        max = glm::max(max, glm::vec3(cell.x, cell.ceiling, cell.y));
+    }
+
+    glm::vec3 center = (max + min) / 2.0f;
+
+    float distance = glm::distance(min, max);
+
+    glm::vec3 forward = GetForwardVector(GetCameraRotation(camera));
+
+    camera.position = center - forward * distance;
+    camera.position.y = max.y + distance * 0.25f;
+    camera.LookAt(center);
+}
+
+
+
+int main(int argc, char** argv)
+{
+    SDL_Init(SDL_INIT_VIDEO);
+
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+
+    SDL_Window* window = SDL_CreateWindow("Tremble", 1280, 720, SDL_WINDOW_OPENGL);
+    SDL_GLContext context = SDL_GL_CreateContext(window);
+    SDL_GL_MakeCurrent(window, context);
+    gladLoadGL();
+
+    Camera camera = {};
+    camera.fov = 70.0f;
+    camera.aspect = 1280.0f / 720.0f;
+    camera.near = 0.1f;
+    camera.far = 1000.0f;
+    camera.position = glm::vec3(2.0f, 1.0f, 3.0f);
+
+    Movement movement = {};
+    movement.speed = 20.0f;
+    movement.friction = 6.0f;
+    movement.mouseSensitivity = 0.1f;
+
+    const int mwidth = 16;
+    const int mheight = 16;
+    int floorData[] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+
+    int ceilingData[] = {
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+        128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128,
+    };
+
+
+
+    std::vector<Cell> cells = CreateCellsFromData(floorData, ceilingData, mwidth, mheight);
     std::vector<Quad> quads = CreateQuads(cells);
-
     std::vector<glm::vec3> colors = GenerateColors(quads.size());
     
+    const Quad* selectedQuad = nullptr;
+
+    CalculateCamerPosition(cells, camera);
+
+    bool cameraMoveEnabled = false;
     bool running = true;
+
+    bool onButtonDownState = false;
+    bool gridSelection = false;
+    glm::vec2 minSelection;
+    glm::vec2 maxSelection;
+    int mx = 0;
+    int my = 0;
+
     /* Loop until the user closes the window */
     while (running)
     {
@@ -778,13 +836,107 @@ int main(int argc, char** argv)
             {
                 if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
                 {
-                    running = false;
+                    gridSelection = false;
                 }
             }
             else if (ev.type == SDL_EVENT_MOUSE_MOTION)
             {
                 mouseDelta.x += (float)ev.motion.xrel;
                 mouseDelta.y += (float)ev.motion.yrel;
+
+                int cellSize = 16;
+                int w = cellSize * mwidth;
+                int h = cellSize * mheight;
+
+                int mw = ev.button.x;
+                int mh = ev.button.y;
+                mx = mw / cellSize;
+                my = mh / cellSize;
+
+                if (onButtonDownState)
+                {
+                    if (mw >= 0 && mw < w && mh >= 0 && mh < h)
+                    {
+                        maxSelection = glm::floor(glm::vec2(mw, mh) / (float)cellSize);
+                    }
+                    else
+                    {
+                        gridSelection = false;
+                    }
+                }
+            }
+            else if (ev.type == SDL_EVENT_MOUSE_WHEEL)
+            {
+                if (gridSelection)
+                {
+                    for (int y = (int)minSelection.y; y <= (int)maxSelection.y; y++)
+                    {
+                        for (int x = (int)minSelection.x; x <= (int)maxSelection.x; x++)
+                        {
+                            floorData[y * mwidth + x] += static_cast<int>(ev.wheel.y * 8.0f);
+                        }
+                    }
+
+                    cells.clear();
+                    cells = CreateCellsFromData(floorData, ceilingData, mwidth, mheight);
+                    quads.clear();
+                    quads = CreateQuads(cells);
+                }
+            }
+            else if (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            {
+                if (ev.button.button == SDL_BUTTON_RIGHT)
+                {
+                    cameraMoveEnabled = true;
+                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                }
+
+                if (ev.button.button == SDL_BUTTON_LEFT)
+                {
+                    int cellSize = 16;
+                    int w = cellSize * mwidth;
+                    int h = cellSize * mheight;
+
+                    int mw = ev.button.x;
+                    int mh = ev.button.y;
+
+                    if (!onButtonDownState)
+                    {
+                        gridSelection = true;
+
+                        if (mw >= 0 && mw < w && mh >= 0 && mh < h)
+                        {
+                            onButtonDownState = true;
+                            minSelection = glm::floor(glm::vec2(mw, mh) / (float)cellSize);
+                            maxSelection = minSelection;
+                        }
+                    }
+                }
+                
+            }
+            else if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP)
+            {
+                if (ev.button.button == SDL_BUTTON_RIGHT)
+                {
+                    cameraMoveEnabled = false;
+                    SDL_SetRelativeMouseMode(SDL_FALSE);
+                }
+
+                if (ev.button.button == SDL_BUTTON_LEFT)
+                {
+                    int cellSize = 16;
+                    int w = cellSize * mwidth;
+                    int h = cellSize * mheight;
+
+                    int mw = ev.button.x;
+                    int mh = ev.button.y;
+                    onButtonDownState = false;
+
+                    if (mw >= 0 && mw < w && mh >= 0 && mh < h)
+                    {
+                        maxSelection = glm::floor(glm::vec2(mw, mh) / (float)cellSize);
+                    }
+                }
             }
         }
 
@@ -794,12 +946,14 @@ int main(int argc, char** argv)
         float deltaTime = float(currentTime - lastTime) / SDL_GetPerformanceFrequency();
         lastTime = currentTime;
 
-        UpdateCameraMovement(camera, movement, deltaTime);
+        if (cameraMoveEnabled)
+        {
+            UpdateCameraMovement(camera, movement, deltaTime);
+        }
 
         glm::mat4 projectionMatrix = GetProjection(camera);
         glm::mat4 viewMatrix = GetView(camera);
 
-        glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -811,33 +965,155 @@ int main(int argc, char** argv)
         glLoadIdentity();
         glLoadMatrixf(glm::value_ptr(viewMatrix));
         
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(1.0f, -1.0f);
         int i = 0;
         for (const Quad& quad : quads)
         {
-            DrawQuad(quad, colors[i++]);
+            i = (i + 1) % colors.size();
+            DrawQuad(quad, glm::vec3(0.8f));
         }
+
+        glDepthFunc(GL_LEQUAL);
+
+        // Highlight selected quad
+        if (gridSelection)
+        {
+            for (int y = (int)minSelection.y; y <= (int)maxSelection.y; y++)
+            {
+                if (y >= mheight) break;
+
+                for (int x = (int)minSelection.x; x <= (int)maxSelection.x; x++)
+                {
+                    if (x >= mwidth) break;
+
+                    int index = y * mwidth + x;
+
+                    for (const Cell& cell : cells)
+                    {
+                        if (cell.x == x && cell.y == y)
+                        {
+                            Quad quad;
+                            quad.center.x = (float)cell.x + 0.5f;
+                            quad.center.y = cell.floor;
+                            quad.center.z = (float)cell.y + 0.5f;
+                            quad.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                            quad.width = 1.0f;
+                            quad.height = 1.0f;
+                            DrawQuad(quad, glm::vec3(1.0f, 0.41f, 0.04f));
+                            break;
+                        }
+                    }
+
+                }
+            }
+        }
+
+        if (mx >= 0 && mx < mwidth && my >= 0 && my < mheight)
+        {
+            for (const Cell& cell : cells)
+            {
+                if (cell.x == mx && cell.y == my)
+                {
+                    Quad quad;
+                    quad.center.x = (float)cell.x + 0.5f;
+                    quad.center.y = cell.floor;
+                    quad.center.z = (float)cell.y + 0.5f;
+                    quad.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                    quad.width = 1.0f;
+                    quad.height = 1.0f;
+                    DrawQuad(quad, glm::vec3(1.0f, 0.41f, 0.04f));
+                    break;
+                }
+            }
+        }
+
+        glDepthFunc(GL_LESS);
+        glDisable(GL_POLYGON_OFFSET_FILL);
+
+
+        for (const Quad& quad : quads)
+        {
+            glm::vec3 cameraToQuad = quad.center - camera.position;
+            if (glm::dot(cameraToQuad, quad.normal) > 0.0f) continue;
+
+            DrawQuadLines(quad, glm::vec3(0.6f));
+        }
+
+        glm::mat4 ortho = glm::ortho(0.0f, 1280.0f, 720.0f, 0.0f, -1.0f, 1.0f);
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glLoadMatrixf(glm::value_ptr(ortho));
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+
+        glDisable(GL_DEPTH_TEST);
+
+        // Draw grid
+
+        const int cellWidth = 16;
+        const int cellHeight = 16;
+
+        int w = cellWidth * mwidth;
+        int h = cellHeight * mheight;
+
+        // Draw background
+        glBegin(GL_TRIANGLE_FAN);
+            glColor3f(1.0f, 1.0f, 1.0f);
+            glVertex2i(0, 0);
+            glVertex2i(0, h);
+            glVertex2i(w, h);
+            glVertex2i(w, 0);
+        glEnd();
+
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // Draw grid selection
+        if (gridSelection)
+        {
+            for (int y = (int)minSelection.y; y <= (int)maxSelection.y; y++)
+            {
+                if (y >= mheight) break;
+
+                for (int x = (int)minSelection.x; x <= (int)maxSelection.x; x++)
+                {
+                    if (x >= mwidth) break;
+
+                    glBegin(GL_TRIANGLE_FAN);
+                    glColor4f(1.00, 0.41, 0.04, 0.75f);
+                    glVertex2i(x * cellWidth, y * cellHeight);
+                    glVertex2i(x * cellWidth, (y + 1) * cellHeight);
+                    glVertex2i((x + 1) * cellWidth, (y + 1) * cellHeight);
+                    glVertex2i((x + 1) * cellWidth, y * cellHeight);
+                    glEnd();
+                }
+            }
+        }
+        glDisable(GL_BLEND);
+
+
+        // Draw grid
+        glBegin(GL_LINES);
+        glColor3f(0.4f, 0.4f, 0.4f);
+        for (int x = 0; x <= w; x += cellWidth)
+        {
+            glVertex2i(x, 0);
+            glVertex2i(x, h);
+        }
+        for (int y = 0; y <= h; y += cellHeight)
+        {
+            glVertex2i(0, y);
+            glVertex2i(w, y);
+        }
+        glEnd();
+
+        glEnable(GL_DEPTH_TEST);
 
         SDL_GL_SwapWindow(window);
 
         mouseDelta = glm::vec2(0.0f);
     }
     return 0;
-}
-
-
-
-bool PointInPolygon(const glm::vec3& point, const glm::vec3* vertices, int numVertices)
-{
-    glm::vec3 p = point;
-
-    int i, j, c = 0;
-    for (i = 0, j = numVertices - 1; i < numVertices; j = i++)
-    {
-        if (((vertices[i].z > p.z) != (vertices[j].z > p.z)) &&
-            (p.x < (vertices[j].x - vertices[i].x) * (p.z - vertices[i].z) / (vertices[j].z - vertices[i].z) + vertices[i].x))
-        {
-            c = !c;
-        }
-    }
-    return c;
 }

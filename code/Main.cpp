@@ -1,4 +1,5 @@
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
+#include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/intersect.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -24,7 +25,6 @@ constexpr glm::vec3 kWorldUp      = glm::vec3(0.0f,  1.0f,  0.0f);
 constexpr glm::vec3 kWorldForward = glm::vec3(0.0f,  0.0f, -1.0f);
 constexpr glm::vec3 kWorldRight   = glm::vec3(1.0f,  0.0f,  0.0f);
 
-bool keys[1024];
 glm::vec2 mouseDelta;
 
 struct Camera
@@ -417,32 +417,34 @@ void UpdateCameraMovement(Camera& camera, Movement& movement, float dt)
 
     float speedBump = 1.0f;
 
-    if (keys[GLFW_KEY_LEFT_SHIFT])
+    const uint8_t* keys = SDL_GetKeyboardState(NULL);
+
+    if (keys[SDL_SCANCODE_LSHIFT])
     {
         speedBump = 2.0f;
     }
 
-    if (keys[GLFW_KEY_W])
+    if (keys[SDL_SCANCODE_W])
     {
         acceleration += forward;
     }
-    if (keys[GLFW_KEY_S])
+    if (keys[SDL_SCANCODE_S])
     {
         acceleration -= forward;
     }
-    if (keys[GLFW_KEY_A])
+    if (keys[SDL_SCANCODE_A])
     {
         acceleration -= right;
     }
-    if (keys[GLFW_KEY_D])
+    if (keys[SDL_SCANCODE_D])
     {
         acceleration += right;
     }
-    if (keys[GLFW_KEY_E])
+    if (keys[SDL_SCANCODE_E])
     {
         acceleration += kWorldUp;
     }
-    if (keys[GLFW_KEY_Q])
+    if (keys[SDL_SCANCODE_Q])
     {
         acceleration -= kWorldUp;
     }
@@ -658,81 +660,28 @@ std::vector<glm::vec3> GenerateColors(size_t count)
 
 int main(int argc, char** argv)
 {
-    GLFWwindow* window;
+    SDL_Init(SDL_INIT_VIDEO);
 
-    if (!glfwInit())
-    {
-        return -1;
-    }
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
 
-    int windowWidth = 640;
-    int windowHeight = 480;
+    SDL_Window* window = SDL_CreateWindow("Tremble", 1280, 720, SDL_WINDOW_OPENGL);
+    SDL_GLContext context = SDL_GL_CreateContext(window);
+    SDL_GL_MakeCurrent(window, context);
+    gladLoadGL();
 
-    /* Create a windowed mode window and its OpenGL context */
-    window = glfwCreateWindow(windowWidth, windowHeight, "Hello World", NULL, NULL);
-
-    if (!window)
-    {
-        glfwTerminate();
-        return -1;
-    }
-
-    /* Make the window's context current */
-    glfwMakeContextCurrent(window);
-
-    glfwSwapInterval(0);
-
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    glfwSetCursorPos(window, windowWidth / 2, windowHeight / 2);
-
-    glfwSetKeyCallback(window, [](GLFWwindow* window, int key, int scancode, int action, int mods) {
-        if (action == GLFW_PRESS)
-        {
-            if (key == GLFW_KEY_ESCAPE)
-            {
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-            }
-
-            keys[key] = true;
-        }
-        else if (action == GLFW_RELEASE)
-        {
-            keys[key] = false;
-        }
-    });
-
-    glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos) {
-        static double lastX = xpos;
-        static double lastY = ypos;
-        static bool firstMouse = true;
-
-        if (firstMouse)
-        {
-            lastX = xpos;
-            lastY = ypos;
-            firstMouse = false;
-        }
-
-        double deltaX = xpos - lastX;
-        double deltaY = ypos - lastY;
-
-        lastX = xpos;
-        lastY = ypos;
-
-        mouseDelta.x = (float)deltaX;
-        mouseDelta.y = (float)deltaY;
-    });
-
+    SDL_SetRelativeMouseMode(SDL_TRUE);
 
     Camera camera = {};
     camera.fov = 70.0f;
-    camera.aspect = 640.0f / 480.0f;
+    camera.aspect = 1280.0f / 720.0f;
     camera.near = 0.1f;
     camera.far = 1000.0f;
     camera.position = glm::vec3(2.0f, 1.0f, 3.0f);
 
     Movement movement = {};
-    movement.speed = 10.0f;
+    movement.speed = 20.0f;
     movement.friction = 6.0f;
     movement.mouseSensitivity = 0.1f;
 
@@ -814,14 +763,35 @@ int main(int argc, char** argv)
 
     std::vector<glm::vec3> colors = GenerateColors(quads.size());
     
-
+    bool running = true;
     /* Loop until the user closes the window */
-    while (!glfwWindowShouldClose(window))
+    while (running)
     {
+        SDL_Event ev;
+        while (SDL_PollEvent(&ev))
+        {
+            if (ev.type == SDL_EVENT_QUIT)
+            {
+                running = false;
+            }
+            else if (ev.type == SDL_EVENT_KEY_DOWN)
+            {
+                if (ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE)
+                {
+                    running = false;
+                }
+            }
+            else if (ev.type == SDL_EVENT_MOUSE_MOTION)
+            {
+                mouseDelta.x += (float)ev.motion.xrel;
+                mouseDelta.y += (float)ev.motion.yrel;
+            }
+        }
+
         // Calculate delta time
-        static double lastTime = glfwGetTime();
-        double currentTime = glfwGetTime();
-        float deltaTime = float(currentTime - lastTime);
+        static uint64_t lastTime = SDL_GetPerformanceCounter();
+        uint64_t currentTime = SDL_GetPerformanceCounter();
+        float deltaTime = float(currentTime - lastTime) / SDL_GetPerformanceFrequency();
         lastTime = currentTime;
 
         UpdateCameraMovement(camera, movement, deltaTime);
@@ -841,21 +811,16 @@ int main(int argc, char** argv)
         glLoadIdentity();
         glLoadMatrixf(glm::value_ptr(viewMatrix));
         
-        glViewport(0, 0, windowWidth, windowHeight);
-
         int i = 0;
         for (const Quad& quad : quads)
         {
             DrawQuad(quad, colors[i++]);
         }
 
-        glfwSwapBuffers(window);
+        SDL_GL_SwapWindow(window);
 
         mouseDelta = glm::vec2(0.0f);
-        glfwPollEvents();
     }
-
-    glfwTerminate();
     return 0;
 }
 

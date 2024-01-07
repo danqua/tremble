@@ -118,8 +118,24 @@ glm::mat4 GetView(const Camera& camera)
 
 void GetQuadVertices(const Quad& quad, glm::vec3 vertices[4])
 {
-    glm::vec3 up    = glm::cross(quad.normal, kWorldRight);
-    glm::vec3 right = glm::cross(up, quad.normal);
+    glm::vec3 up;
+    glm::vec3 right;
+
+    if (glm::abs(glm::dot(quad.normal, kWorldUp)) > 0.99f)
+    {
+        up = glm::cross(quad.normal, kWorldRight);
+        right = glm::cross(up, quad.normal);
+    }
+    else if (glm::abs(glm::dot(quad.normal, kWorldRight)) > 0.99f)
+    {
+        right = glm::cross(quad.normal, kWorldUp);
+        up = glm::cross(quad.normal, right);
+    }
+    else
+    {
+        up = glm::cross(quad.normal, kWorldRight);
+        right = glm::cross(up, quad.normal);
+    }
 
     glm::vec3 halfR = right * quad.width * 0.5f;
     glm::vec3 halfU = up * quad.height * 0.5f;
@@ -515,6 +531,131 @@ bool PointInPolygon(const glm::vec3& point, const glm::vec3* vertices, int numVe
 #include <sstream>
 #include <string>
 
+#define BIT(x) (1 << x)
+
+enum CellFlags
+{
+    CellFlags_None    = 0,
+    CellFalgs_Visited = BIT(0),
+};
+
+struct Cell
+{
+    int x;
+    int y;
+    float floor;
+    float ceiling;
+    int flags;
+    std::array<Cell*, 4> neighbors;
+};
+
+
+std::vector<Quad> CreateQuads(std::vector<Cell>& cells)
+{
+    std::vector<Quad> quads;
+    std::unordered_map<const Cell*, bool> visited;
+
+    for (const Cell& cell : cells)
+    {
+        visited[&cell] = false;
+    }
+
+    for (Cell& cell : cells)
+    {
+        // Ground
+        Quad quad;
+        quad.center.x = (float)cell.x + 0.5f;
+        quad.center.y = cell.floor;
+        quad.center.z = (float)cell.y + 0.5f;
+        quad.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        quad.width = 1.0f;
+        quad.height = 1.0f;
+        quads.push_back(quad);
+
+        // Ceiling
+        quad.normal = glm::vec3(0.0f, -1.0f, 0.0f);
+        quad.center.y = cell.ceiling;
+        quads.push_back(quad);
+
+        // Walls
+        for (size_t i = 0; i < 4; i++)
+        {
+            int x = cell.x;
+            int y = cell.y;
+
+            glm::ivec2 coords[4] = {
+                glm::vec2(x, y - 1),
+                glm::vec2(x, y + 1),
+                glm::vec2(x + 1, y),
+                glm::vec2(x - 1, y),
+            };
+
+            glm::vec3 normals[4] = {
+                glm::vec3( 0.0f, 0.0f,  1.0f),
+                glm::vec3( 0.0f, 0.0f, -1.0f),
+                glm::vec3(-1.0f, 0.0f,  0.0f),
+                glm::vec3( 1.0f, 0.0f,  0.0f)
+            };
+
+            const Cell* other = cell.neighbors[i];
+
+            // Floor & Ceiling
+            Quad quad;
+            quad.center.x = static_cast<float>(coords[i].x) + (glm::sign(normals[i].x) == 1) * normals[i].x + (glm::abs(normals[i].z) > 0.9f) * 0.5f;
+            quad.center.z = static_cast<float>(coords[i].y) + (glm::sign(normals[i].z) == 1) * normals[i].z + (glm::abs(normals[i].x) > 0.9f) * 0.5f;
+            quad.normal = normals[i];
+            quad.width = 1.0f;
+
+            // When there is an adjacent cell, we need to check if the floor or ceiling is higher. Otherwise, we can just create a wall.
+            if (other)
+            {
+                if (cell.floor < other->floor)
+                {
+                    float height = other->floor - cell.floor;
+                    quad.center.y = cell.floor + height / 2.0f;
+                    quad.height = height;
+                    quads.push_back(quad);
+                }
+                
+                if (cell.ceiling > other->ceiling)
+                {
+                    float height = cell.ceiling - other->ceiling;
+                    quad.center.y = cell.ceiling - height / 2.0f;
+                    quad.height = height;
+                    quads.push_back(quad);
+                }
+            }
+            else
+            {
+                float height = cell.ceiling - cell.floor;
+                quad.center.y = cell.floor + height / 2.0f;
+                quad.height = height;
+                quads.push_back(quad);
+            }
+        }
+    }
+    return quads;
+}
+
+
+// Generate radom colors
+std::vector<glm::vec3> GenerateColors(size_t count)
+{
+    std::vector<glm::vec3> colors;
+    colors.resize(count);
+
+    for (size_t i = 0; i < count; i++)
+    {
+        colors[i] = glm::vec3(
+            (float)(63 + rand() % 192) / 255.0f,
+            (float)(63 + rand() % 192) / 255.0f,
+            (float)(63 + rand() % 192) / 255.0f
+        );
+    }
+    return colors;
+}
+
+
 int main(int argc, char** argv)
 {
     GLFWwindow* window;
@@ -588,222 +729,90 @@ int main(int argc, char** argv)
     camera.aspect = 640.0f / 480.0f;
     camera.near = 0.1f;
     camera.far = 1000.0f;
-    camera.position = glm::vec3(2.0f, 1.0f, -3.0f);
+    camera.position = glm::vec3(2.0f, 1.0f, 3.0f);
 
     Movement movement = {};
     movement.speed = 10.0f;
     movement.friction = 6.0f;
     movement.mouseSensitivity = 0.1f;
 
-    struct Sector
+    const int mwidth = 8;
+    const int mheight = 8;
+    int floorData[] = {
+        -1, -1, -1,  -1, -1, -1, -1, -1,
+        -1,  0,  0,   0,  0, -1, -1, -1,
+        -1,  0, -8, -16,  0,  8,  8, -1,
+        -1,  0, -8, -16,  0,  8,  8, -1,
+        -1,  0,  0,   0,  0, -1, 16, -1,
+        -1,  0, 32,   0, -1, 16, 16, -1,
+        -1,  0,  0,   0, -1, 16, 16, -1,
+        -1, -1, -1,  -1, -1, -1, -1, -1
+    };
+
+    int ceilingData[] = {
+        -1,  -1,  -1,  -1, -1,   -1,  -1, -1,
+        -1, 128, 128, 128, 128,  -1,  -1, -1,
+        -1, 128, 128, 128, 128,  96, 132, -1,
+        -1, 128, 128, 128, 128,  96, 132, -1,
+        -1, 128, 128, 128, 128,  -1, 148, -1,
+        -1, 128, 128, 128,  -1, 148, 148, -1,
+        -1, 128, 128, 128,  -1, 148, 148, -1,
+        -1,  -1,  -1,  -1,  -1,  -1,  -1, -1
+    };
+
+    std::vector<Cell> cells;
+
+    for (int y = 0; y < mheight; y++)
     {
-        int firstWall;
-        int numWalls;
-        float floorHeight;
-        float ceilingHeight;
-    };
-
-    struct Wall
-    {
-        int v[2];
-        int sector;
-    };
-
-    std::vector<glm::vec2> wallVertices = {
-        glm::vec2( 0.0f, 0.0f),
-        glm::vec2( 4.0f, 0.0f),
-        glm::vec2( 5.0f, 2.0f),
-        glm::vec2( 7.0f, 2.0f),
-        glm::vec2( 7.0f, 4.0f),
-        glm::vec2( 5.0f, 4.0f),
-        glm::vec2( 4.0f, 6.0f),
-        glm::vec2( 0.0f, 6.0f),
-        glm::vec2( 9.0f, 1.0f),
-        glm::vec2(11.0f, 1.0f),
-        glm::vec2(11.0f, 3.0f),
-        glm::vec2( 9.0f, 3.0f)
-    };
-
-    std::vector<Sector> sectors = {
-        {  0, 6,  0.0f, 3.0f },
-        {  6, 4, 0.25f, 2.0f },
-        { 10, 4,  0.5f, 3.0f },
-        { 14, 4,  0.75f, 3.0f }
-    };
-
-    std::vector<Wall> walls = {
-        { {  0,  1 }, -1 },
-        { {  1,  2 }, -1 },
-        { {  2,  5 },  1 },
-        { {  5,  6 }, -1 },
-        { {  6,  7 }, -1 },
-        { {  7,  0 }, -1 },
-        { {  2,  3 }, -1 },
-        { {  3,  4 },  2 },
-        { {  4,  5 }, -1 },
-        { {  5,  2 },  0 },
-        { {  3,  8 }, -1 },
-        { {  8, 11 },  3 },
-        { { 11,  4 }, -1 },
-        { {  4,  3 },  1 },
-        { {  8,  9 }, -1 },
-        { {  9, 10 }, -1 },
-        { { 10, 11 }, -1 },
-        { { 11,  8 },  2 },
-    };
-
-    glm::vec3 randomColors[16] = {
-        glm::vec3(0.6f, 0.8f, 0.8f),
-        glm::vec3(0.7f, 0.7f, 1.0f),
-        glm::vec3(0.6f, 0.8f, 0.7f),
-        glm::vec3(0.7f, 0.9f, 0.9f),
-        glm::vec3(0.7f, 1.0f, 1.0f),
-        glm::vec3(0.8f, 0.6f, 0.8f),
-        glm::vec3(0.8f, 0.6f, 1.0f),
-        glm::vec3(1.0f, 0.6f, 1.0f),
-        glm::vec3(0.8f, 0.6f, 0.8f),
-        glm::vec3(0.9f, 0.5f, 0.7f),
-        glm::vec3(0.8f, 0.8f, 0.7f),
-        glm::vec3(0.8f, 0.7f, 0.5f),
-        glm::vec3(0.9f, 0.7f, 0.9f),
-        glm::vec3(0.5f, 1.0f, 0.7f),
-        glm::vec3(0.7f, 1.0f, 0.8f),
-        glm::vec3(0.8f, 0.9f, 0.7f)
-    };
-
-    auto PointInSector = [=](const glm::vec3& point, const Sector& sector) {
-
-        std::vector<glm::vec3> vertices;
-
-        for (int i = 0; i < sector.numWalls; ++i)
+        for (int x = 0; x < mwidth; x++)
         {
-            const Wall& wall = walls[sector.firstWall + i];
+            // Floor
+            int f = floorData[y * mwidth + x];
+            int c = ceilingData[y * mwidth + x];
 
-            glm::vec2 v[2] = {
-                wallVertices[wall.v[0]],
-                wallVertices[wall.v[1]]
-            };
-
-            glm::vec3 v3[2] = {
-                glm::vec3(v[0].x, 0.0f, -v[0].y),
-                glm::vec3(v[1].x, 0.0f, -v[1].y)
-            };
-
-            vertices.push_back(v3[0]);
-        }
-
-        return PointInPolygon(point, vertices.data(), vertices.size());
-    };
-
-    int wallIndex = 0;
-
-    int drawnSectors = 0;
-    auto DrawSector = [&](const Sector& sector)
-    {
-
-        for (int i = 0; i < sector.numWalls; ++i)
-        {
-            const Wall& wall = walls[sector.firstWall + i];
-            glm::vec2 v2[2] = { wallVertices[wall.v[0]], wallVertices[wall.v[1]] };
-            glm::vec3 v3[2] = { glm::vec3(v2[0].x, 0.0f, -v2[0].y), glm::vec3(v2[1].x, 0.0f, -v2[1].y) };
-
-            glm::vec3 normal = glm::normalize(glm::cross(v3[1] - v3[0], glm::vec3(0.0f, 1.0f, 0.0f)));
-
-            glm::vec3 color = randomColors[wallIndex++ % 16];
-            color = glm::vec3(glm::dot(glm::vec3(0.8f, 0.65f, 0.9f), glm::abs(normal)));
-            if (wall.sector != -1)
+            if (f == -1)
             {
-                const Sector& otherSector = sectors[wall.sector];
-                if (otherSector.floorHeight > sector.floorHeight)
-                {
-                    DrawQuadFromLine(v3[0], v3[1], sector.floorHeight, otherSector.floorHeight, color);
-                }
-                if (otherSector.ceilingHeight < sector.ceilingHeight)
-                {
-                    DrawQuadFromLine(v3[0], v3[1], otherSector.ceilingHeight, sector.ceilingHeight, color);
-                }
                 continue;
             }
 
-            DrawQuadFromLine(v3[0], v3[1], sector.floorHeight, sector.ceilingHeight, color);
+            Cell& cell = cells.emplace_back();
+            cell.x = x;
+            cell.y = y;
+            cell.floor = (float)f / 32.0f;
+            cell.ceiling = (float)c / 32.0f;
+            cell.neighbors.fill(nullptr);
         }
+    }
 
-        std::vector<glm::vec3> vertices;
-        for (int i = 0; i < sector.numWalls; ++i)
-        {
-            const Wall& wall = walls[sector.firstWall + i];
-            glm::vec2 v2[2] = { wallVertices[wall.v[0]], wallVertices[wall.v[1]] };
-            glm::vec3 v3[2] = { glm::vec3(v2[0].x, sector.floorHeight, -v2[0].y), glm::vec3(v2[1].x, sector.floorHeight, -v2[1].y) };
-            vertices.push_back(v3[0]);
-        }
-
-        glm::vec3 color = glm::vec3(glm::dot(glm::vec3(0.8f, 0.65f, 0.9f), glm::vec3(0.0f, 1.0f, 0.0f)));
-
-        
-        DrawPolygon(vertices.data(), vertices.size(), color);
-
-        std::reverse(vertices.begin(), vertices.end());
-        for (glm::vec3& vertex : vertices)
-        {
-            vertex.y = sector.ceilingHeight;
-        }
-        DrawPolygon(vertices.data(), vertices.size(), color);
-
-        drawnSectors++;
-    };
-    
-    std::function<void(const Sector&, std::vector<const Sector*>&)> MarkSectorsVisible = [&](const Sector& sector, std::vector<const Sector*>& visibleSectors)
+    // Second pass: set all the neighbors
+    for (Cell& cell : cells)
     {
-        visibleSectors.push_back(&sector);
+        int x = cell.x;
+        int y = cell.y;
 
-        for (int i = 0; i < sector.numWalls; ++i)
+        glm::ivec2 coords[4] = {
+            glm::ivec2(x, y - 1),
+            glm::ivec2(x, y + 1),
+            glm::ivec2(x + 1, y),
+            glm::ivec2(x - 1, y),
+        };
+
+        for (int i = 0; i < 4; i++)
         {
-            const Wall& wall = walls[sector.firstWall + i];
-
-            glm::vec2 v2[2] = {
-                wallVertices[wall.v[0]],
-                wallVertices[wall.v[1]]
-            };
-
-            glm::vec3 v3[2] = {
-                glm::vec3(v2[0].x, 0.0f, -v2[0].y),
-                glm::vec3(v2[1].x, 0.0f, -v2[1].y)
-            };
-
-            glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-            glm::vec3 right = glm::normalize(glm::cross(v3[1] - v3[0], up));
-            glm::vec3 normal = glm::cross(right, up);
-            float ceilingHeight = 2.0f;
-            float floorHeight = 0.0f;
-
-            glm::vec3 v[4] = {
-                v3[0] + up * ceilingHeight,
-                v3[1] + up * ceilingHeight,
-                v3[1] + up * floorHeight,
-                v3[0] + up * floorHeight
-            };
-
-            Box box(v, 4);
-            box.Expand(right * 0.05f);
-
-            if (wall.sector != -1)
+            for (Cell& other : cells)
             {
-                if (std::find(visibleSectors.begin(), visibleSectors.end(), &sectors[wall.sector]) != visibleSectors.end())
+                if (other.x == coords[i].x && other.y == coords[i].y)
                 {
-                    continue;
-                }
-
-                glm::mat4 projectionMatrix = GetProjection(camera);
-                glm::mat4 viewMatrix = GetView(camera);
-                Frustum frustum(projectionMatrix * viewMatrix);
-
-                if (frustum.IntersectsBox(box))
-                {
-                    MarkSectorsVisible(sectors[wall.sector], visibleSectors);
+                    cell.neighbors[i] = &other;
+                    break;
                 }
             }
         }
-    };
+    }
+
+    std::vector<Quad> quads = CreateQuads(cells);
+
+    std::vector<glm::vec3> colors = GenerateColors(quads.size());
     
 
     /* Loop until the user closes the window */
@@ -834,27 +843,11 @@ int main(int argc, char** argv)
         
         glViewport(0, 0, windowWidth, windowHeight);
 
-        drawnSectors = 0;
-        wallIndex = 0;
-
-
-        std::vector<const Sector*> visibleSectors;
-        for (const Sector& sector : sectors)
+        int i = 0;
+        for (const Quad& quad : quads)
         {
-            if (PointInSector(camera.position, sector))
-            {
-                MarkSectorsVisible(sector, visibleSectors);
-                break;
-            }
+            DrawQuad(quad, colors[i++]);
         }
-
-
-        for (const Sector* sector : visibleSectors)
-        {
-            DrawSector(*sector);
-        }
-        printf("Sectors: %d\n", drawnSectors);
-
 
         glfwSwapBuffers(window);
 
